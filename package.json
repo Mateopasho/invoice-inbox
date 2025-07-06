@@ -1,0 +1,15 @@
+{
+  "name": "invoice-inbox",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@azure/identity": "^4.0.0",
+    "@microsoft/microsoft-graph-client": "^3.0.0",
+    "csv-parse": "^5.5.0",
+    "csv-stringify": "^6.3.0",
+    "isomorphic-fetch": "^3.0.0",
+    "openai": "^4.0.0",
+    "twilio": "^4.0.0",
+    "node-fetch": "^3.3.0"
+  }
+}
