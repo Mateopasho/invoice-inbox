@@ -149,7 +149,9 @@ async function processAttachment({ url, contentType, filename }, openai) {
 
     return { ok: true, filename };
   } catch (err) {
-    console.error(`❌ ${filename}:`, err.message);
+    // ---- Added full error logging ----
+    console.error(`❌ ${filename} FULL ERROR:`, err);
+    console.error(`❌ ${filename} MESSAGE   :`, err.message);
     return { ok: false, filename, error: err.message };
   }
 }
