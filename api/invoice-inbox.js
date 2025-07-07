@@ -218,14 +218,28 @@ async function extractFromPdf(buffer, openai) {
 }
 
 function extractionPrompt() {
-  return `Extract the following from the provided text:
+  return `
+Extract the following from the provided text:
 - invoice_date (YYYY-MM-DD)
 - seller
 - total_amount (number, two decimals)
 - tax
 - payment method
 
-You are an invoice extractor. Return ONLY a valid JSON object.`;
+Return ONLY a valid JSON object with those exact keys.
+Do NOT wrap the output in \`\`\` fences.
+If a value is missing, use an empty string ("").
+
+Example:
+
+{
+  "invoice_date": "2025-01-18",
+  "seller": "OMV Downstream GmbH",
+  "total": 94.05,
+  "tax": 0.00,
+  "payment_method": "Credit Card"
+}
+`;
 }
 
 // ---------------------------------------------------------------------------
