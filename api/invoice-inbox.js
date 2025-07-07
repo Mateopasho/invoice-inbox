@@ -185,7 +185,17 @@ async function extractFromImage(buffer, openai) {
     ]
   });
 
-  return JSON.parse(stripFence(response.choices[0].message.content));
+  // --- TEMP LOGS -----------------------------------------------------------
+  console.log('AI RAW IMAGE OUTPUT:', response.choices[0].message.content);
+  // -------------------------------------------------------------------------
+
+  const parsed = JSON.parse(stripFence(response.choices[0].message.content));
+
+  // --- TEMP LOGS -----------------------------------------------------------
+  console.log('AI PARSED IMAGE OUTPUT:', parsed);
+  // -------------------------------------------------------------------------
+
+  return parsed;
 }
 
 async function extractFromPdf(buffer, openai) {
@@ -204,6 +214,10 @@ async function extractFromPdf(buffer, openai) {
 
   const extractedText = await pdfRes.text();
 
+  // --- TEMP LOG ------------------------------------------------------------
+  console.log('EXTRACTED PDF TEXT (first 300):', extractedText.slice(0, 300));
+  // -------------------------------------------------------------------------
+
   // 2. Ask ChatGPT to pull out the fields
   const prompt = extractionPrompt();
   const response = await openai.chat.completions.create({
@@ -214,7 +228,17 @@ async function extractFromPdf(buffer, openai) {
     ]
   });
 
-  return JSON.parse(stripFence(response.choices[0].message.content));
+  // --- TEMP LOGS -----------------------------------------------------------
+  console.log('AI RAW PDF OUTPUT:', response.choices[0].message.content);
+  // -------------------------------------------------------------------------
+
+  const parsed = JSON.parse(stripFence(response.choices[0].message.content));
+
+  // --- TEMP LOGS -----------------------------------------------------------
+  console.log('AI PARSED PDF OUTPUT:', parsed);
+  // -------------------------------------------------------------------------
+
+  return parsed;
 }
 
 function extractionPrompt() {
