@@ -228,6 +228,19 @@ function extractionPrompt() {
 You are an invoice extractor. Return ONLY a valid JSON object.`;
 }
 
+// ---------------------------------------------------------------------------
+// Improved stripFence helper
+// ---------------------------------------------------------------------------
 function stripFence(str = '') {
-  return str.replace(/```json\\s*/i, '').replace(/```$/, '').trim();
+  // 1. Remove zero‑width and non‑breaking spaces
+  str = str.replace(/[\u200B-\u200D\uFEFF]/g, '');
+
+  // 2. Capture content between ```json ... ``` fences (or plain ``` ... ```)
+  const match = str.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (match) {
+    return match[1].trim();
+  }
+
+  // 3. If no fences, just trim and return
+  return str.trim();
 }
