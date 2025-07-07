@@ -130,7 +130,7 @@ async function processAttachment({ url, contentType, filename }, openai) {
     // 3. OneDrive (folder + file)
     const graph    = await getGraphClient();
     const folderId = await ensureYearMonthFolder(graph);
-    await uploadFile(graph, folderId, finalName, buffer);
+    await uploadFile(graph, folderId, finalName, buffer, contentType);
 
     // 4. CSV (create if missing, then append)
     const csvId = await ensureCsvFile(graph, folderId);
