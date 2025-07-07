@@ -11,41 +11,74 @@ import { ensureCsvFile, appendCsvRow } from '../lib/csvDrive.js';
 export default async function handler(req, res) {
   try {
     // -----------------------------------------------------------------------
-    // 1. Validate request
+    // 1. Validate request method
     // -----------------------------------------------------------------------
     if (req.method !== 'POST') {
       res.status(405).send('Method Not Allowed');
       return;
     }
 
+    // -----------------------------------------------------------------------
+    // 2. Validate body
+    // -----------------------------------------------------------------------
     const { from, numMedia = 0, media = [] } = req.body || {};
+
     if (!from) {
       res.status(400).json({ error: 'Missing "from" in request body' });
       return;
     }
 
-    // -----------------------------------------------------------------------
-    // 2. Early exit when there is no media
-    // -----------------------------------------------------------------------
     if (Number(numMedia) === 0 || media.length === 0) {
       res.json({ replyBody: 'No attachment found in the message.' });
       return;
     }
 
     // -----------------------------------------------------------------------
-    // 3. Process each attachment
+    // 3. Validate each media item before processing
+    // -----------------------------------------------------------------------
+    const validatedMedia = media.map((m, idx) => {
+      const { url, contentType, filename } = m || {};
+
+      if (!url) {
+        return {
+          ok: false,
+          filename: filename || `media_${idx}`,
+          error: 'Missing media URL'
+        };
+      }
+
+      if (!contentType) {
+        return {
+          ok: false,
+          filename: filename || url.split('/').pop() || `media_${idx}`,
+          error: 'Missing content type'
+        };
+      }
+
+      return { ok: true, url, contentType, filename };
+    });
+
+    // Split into items that can be processed vs. items that already failed
+    const toProcess = validatedMedia.filter(m => m.ok);
+    const preErrors  = validatedMedia.filter(m => !m.ok);
+
+    // -----------------------------------------------------------------------
+    // 4. Process each valid attachment
     // -----------------------------------------------------------------------
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const results = await Promise.all(
-      media.map(m => processAttachment(m, openai))
+    const processedResults = await Promise.all(
+      toProcess.map(m => processAttachment(m, openai))
     );
+
+    // Merge early validation errors with processing results
+    const results = [...preErrors, ...processedResults];
 
     const ok  = results.filter(r => r.ok);
     const err = results.filter(r => !r.ok);
 
     // -----------------------------------------------------------------------
-    // 4. Build reply
+    // 5. Build reply
     // -----------------------------------------------------------------------
     let replyBody = '';
 
@@ -59,16 +92,16 @@ export default async function handler(req, res) {
     if (err.length) {
       replyBody +=
         '⚠️ Could not process:\n' +
-        err.map(r => `• ${r.filename || 'unknown'} – ${r.error}`).join('\n');
+        err.map(r => `• ${r.filename} – ${r.error}`).join('\n');
     }
 
-    // Safety fallback (should not trigger because of earlier checks)
+    // Fallback (should not trigger because of earlier checks)
     if (!replyBody.trim()) {
       replyBody = 'No attachment found in the message.';
     }
 
     // -----------------------------------------------------------------------
-    // 5. Return reply to n8n
+    // 6. Return reply to n8n
     // -----------------------------------------------------------------------
     res.json({ replyBody: replyBody.trim() });
   } catch (fatal) {
@@ -116,7 +149,7 @@ async function processAttachment({ url, contentType, filename }, openai) {
 
     return { ok: true, filename };
   } catch (err) {
-    console.error(`❌ ${filename || 'unknown'}:`, err.message);
+    console.error(`❌ ${filename}:`, err.message);
     return { ok: false, filename, error: err.message };
   }
 }
