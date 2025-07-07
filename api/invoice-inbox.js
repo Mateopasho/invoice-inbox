@@ -9,31 +9,55 @@ import {
 import { ensureCsvFile, appendCsvRow } from '../lib/csvDrive.js';
 
 export default async function handler(req, res) {
+  // -------------------------------------------------------------------------
+  // 1. Validate request
+  // -------------------------------------------------------------------------
   if (req.method !== 'POST') {
     res.status(405).send('Method Not Allowed');
     return;
   }
 
-  const { from, numMedia, media = [] } = req.body || {};
+  const { from, numMedia = 0, media = [] } = req.body || {};
   if (!from) {
     res.status(400).json({ error: 'Missing "from" in request body' });
     return;
   }
 
+  // -------------------------------------------------------------------------
+  // 2. Early exit when there is no media
+  // -------------------------------------------------------------------------
+  if (Number(numMedia) === 0 || media.length === 0) {
+    res.json({ replyBody: 'No attachment found in the message.' });
+    return;
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. Process each attachment
+  // -------------------------------------------------------------------------
   const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
   const results = await Promise.all(
     media.map(m => processAttachment(m, openai))
   );
 
-  const ok = results.filter(r => r.ok);
+  const ok  = results.filter(r => r.ok);
   const err = results.filter(r => !r.ok);
 
+  // -------------------------------------------------------------------------
+  // 4. Build reply
+  // -------------------------------------------------------------------------
   let replyBody = '';
-  if (ok.length) replyBody += `✅ Processed: ${ok.map(r => r.filename).join(', ')}\n`;
+  if (ok.length)  replyBody += `✅ Processed: ${ok.map(r => r.filename).join(', ')}\n`;
   if (err.length) replyBody += `⚠️ Could not process: ${err.map(r => r.filename).join(', ')}`;
 
-  // Return the reply body to n8n
+  // Fallback (should not trigger because of early‑exit, but added for safety)
+  if (!replyBody.trim()) {
+    replyBody = 'No attachment found in the message.';
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. Return reply to n8n
+  // -------------------------------------------------------------------------
   res.json({ replyBody: replyBody.trim() });
 }
 
@@ -55,7 +79,7 @@ async function processAttachment({ url, contentType, filename }, openai) {
     }
 
     // 3. OneDrive (folder + file)
-    const graph = await getGraphClient();
+    const graph    = await getGraphClient();
     const folderId = await ensureYearMonthFolder(graph);
     await uploadFile(graph, folderId, filename, buffer);
 
