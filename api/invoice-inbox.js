@@ -60,7 +60,7 @@ export default async function handler(req, res) {
 
     // Split into items that can be processed vs. items that already failed
     const toProcess = validatedMedia.filter(m => m.ok);
-    const preErrors  = validatedMedia.filter(m => !m.ok);
+    const preErrors = validatedMedia.filter(m => !m.ok);
 
     // -----------------------------------------------------------------------
     // 4. Process each valid attachment
@@ -74,7 +74,7 @@ export default async function handler(req, res) {
     // Merge early validation errors with processing results
     const results = [...preErrors, ...processedResults];
 
-    const ok  = results.filter(r => r.ok);
+    const ok = results.filter(r => r.ok);
     const err = results.filter(r => !r.ok);
 
     // -----------------------------------------------------------------------
@@ -120,7 +120,8 @@ export default async function handler(req, res) {
 async function processAttachment({ url, contentType, filename }, openai) {
   try {
     // 1. Download from Twilio
-    const buffer = await downloadFromTwilio(url);
+    const { buffer, filename: originalName } = await downloadFromTwilio(url); // NEW
+    const finalName = originalName || filename;                               // NEW
 
     // 2. Extract invoice data
     const data = contentType.includes('pdf')
@@ -132,9 +133,9 @@ async function processAttachment({ url, contentType, filename }, openai) {
     }
 
     // 3. OneDrive (folder + file)
-    const graph    = await getGraphClient();
+    const graph = await getGraphClient();
     const folderId = await ensureYearMonthFolder(graph);
-    await uploadFile(graph, folderId, filename, buffer);
+    await uploadFile(graph, folderId, finalName, buffer);                     // CHANGED
 
     // 4. CSV (create if missing, then append)
     const csvId = await ensureCsvFile(graph, folderId);
@@ -147,7 +148,7 @@ async function processAttachment({ url, contentType, filename }, openai) {
       data.payment_method
     ]);
 
-    return { ok: true, filename };
+    return { ok: true, filename: finalName };                                 // CHANGED
   } catch (err) {
     // ---- Added full error logging ----
     console.error(`❌ ${filename} FULL ERROR:`, err);
@@ -169,10 +170,21 @@ async function downloadFromTwilio(url) {
         ).toString('base64')
     }
   });
+
   if (!res.ok) {
     throw new Error(`Failed to download media: ${res.status} ${res.statusText}`);
   }
-  return Buffer.from(await res.arrayBuffer());
+
+  // ── NEW ── try to read Content‑Disposition for the filename
+  let filename = url.split('/').pop(); // fallback (ME…)
+  const cd = res.headers.get('content-disposition');
+  if (cd) {
+    const m = cd.match(/filename="(.+?)"/i);
+    if (m) filename = decodeURIComponent(m[1]);
+  }
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return { buffer, filename };                                               // CHANGED
 }
 
 async function extractFromImage(buffer, openai) {
