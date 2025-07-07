@@ -185,16 +185,17 @@ async function extractFromImage(buffer, openai) {
     ]
   });
 
-  // --- TEMP LOGS -----------------------------------------------------------
   console.log('AI RAW IMAGE OUTPUT:', response.choices[0].message.content);
-  // -------------------------------------------------------------------------
 
   const parsed = JSON.parse(stripFence(response.choices[0].message.content));
 
-  // --- TEMP LOGS -----------------------------------------------------------
-  console.log('AI PARSED IMAGE OUTPUT:', parsed);
-  // -------------------------------------------------------------------------
+  // Map total_amount → total
+  if (parsed.total_amount !== undefined && parsed.total === undefined) {
+    parsed.total = parsed.total_amount;
+    delete parsed.total_amount;
+  }
 
+  console.log('AI PARSED IMAGE OUTPUT:', parsed);
   return parsed;
 }
 
@@ -213,10 +214,7 @@ async function extractFromPdf(buffer, openai) {
   }
 
   const extractedText = await pdfRes.text();
-
-  // --- TEMP LOG ------------------------------------------------------------
   console.log('EXTRACTED PDF TEXT (first 300):', extractedText.slice(0, 300));
-  // -------------------------------------------------------------------------
 
   // 2. Ask ChatGPT to pull out the fields
   const prompt = extractionPrompt();
@@ -228,16 +226,17 @@ async function extractFromPdf(buffer, openai) {
     ]
   });
 
-  // --- TEMP LOGS -----------------------------------------------------------
   console.log('AI RAW PDF OUTPUT:', response.choices[0].message.content);
-  // -------------------------------------------------------------------------
 
   const parsed = JSON.parse(stripFence(response.choices[0].message.content));
 
-  // --- TEMP LOGS -----------------------------------------------------------
-  console.log('AI PARSED PDF OUTPUT:', parsed);
-  // -------------------------------------------------------------------------
+  // Map total_amount → total
+  if (parsed.total_amount !== undefined && parsed.total === undefined) {
+    parsed.total = parsed.total_amount;
+    delete parsed.total_amount;
+  }
 
+  console.log('AI PARSED PDF OUTPUT:', parsed);
   return parsed;
 }
 
@@ -246,7 +245,7 @@ function extractionPrompt() {
 Extract the following from the provided text:
 - invoice_date (YYYY-MM-DD)
 - seller
-- total_amount (number, two decimals)
+- total (number, two decimals)
 - tax
 - payment method
 
