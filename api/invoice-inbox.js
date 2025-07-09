@@ -182,8 +182,21 @@ async function extractFromImage(buffer, openai) {
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
     messages: [
-      { role: 'user', content: prompt },
-      { role: 'user', content: { type: 'image_url', image_url: { base64 } } }
+      {
+        role: 'user',
+        content: [
+          {
+            type: 'image_url',
+            image_url: {
+              url: `data:image/png;base64,${base64}`
+            }
+          },
+          {
+            type: 'text',
+            text: prompt
+          }
+        ]
+      }
     ]
   });
 
@@ -200,6 +213,7 @@ async function extractFromImage(buffer, openai) {
   console.log('AI PARSED IMAGE OUTPUT:', parsed);
   return parsed;
 }
+
 
 async function extractFromPdf(buffer, openai) {
   // 1. Send to external PDF text extractor
