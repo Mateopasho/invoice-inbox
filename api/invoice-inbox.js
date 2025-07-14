@@ -10,17 +10,11 @@ import { ensureCsvFile, appendCsvRow } from '../lib/csvDrive.js';
 
 export default async function handler(req, res) {
   try {
-    // -----------------------------------------------------------------------
-    // 1. Validate request method
-    // -----------------------------------------------------------------------
     if (req.method !== 'POST') {
       res.status(405).send('Method Not Allowed');
       return;
     }
 
-    // -----------------------------------------------------------------------
-    // 2. Validate body
-    // -----------------------------------------------------------------------
     const { from, numMedia = 0, media = [] } = req.body || {};
 
     if (!from) {
@@ -33,9 +27,6 @@ export default async function handler(req, res) {
       return;
     }
 
-    // -----------------------------------------------------------------------
-    // 3. Validate each media item before processing
-    // -----------------------------------------------------------------------
     const validatedMedia = media.map((m, idx) => {
       const { url, contentType, filename } = m || {};
 
@@ -58,28 +49,19 @@ export default async function handler(req, res) {
       return { ok: true, url, contentType, filename };
     });
 
-    // Split into items that can be processed vs. items that already failed
     const toProcess = validatedMedia.filter(m => m.ok);
-    const preErrors  = validatedMedia.filter(m => !m.ok);
+    const preErrors = validatedMedia.filter(m => !m.ok);
 
-    // -----------------------------------------------------------------------
-    // 4. Process each valid attachment
-    // -----------------------------------------------------------------------
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
     const processedResults = await Promise.all(
       toProcess.map(m => processAttachment(m, openai))
     );
 
-    // Merge early validation errors with processing results
     const results = [...preErrors, ...processedResults];
-
-    const ok  = results.filter(r => r.ok);
+    const ok = results.filter(r => r.ok);
     const err = results.filter(r => !r.ok);
 
-    // -----------------------------------------------------------------------
-    // 5. Build reply
-    // -----------------------------------------------------------------------
     let replyBody = '';
 
     if (ok.length) {
@@ -95,17 +77,12 @@ export default async function handler(req, res) {
         err.map(r => `• ${r.filename} – ${r.error}`).join('\n');
     }
 
-    // Fallback (should not trigger because of earlier checks)
     if (!replyBody.trim()) {
       replyBody = 'No attachment found in the message.';
     }
 
-    // -----------------------------------------------------------------------
-    // 6. Return reply to n8n
-    // -----------------------------------------------------------------------
     res.json({ replyBody: replyBody.trim() });
   } catch (fatal) {
-    // Any unexpected error that escaped the pipeline
     console.error('💥 Fatal error in handler:', fatal);
     res.status(500).json({
       replyBody:
@@ -114,15 +91,11 @@ export default async function handler(req, res) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Per‑attachment pipeline
-// ---------------------------------------------------------------------------
 async function processAttachment({ url, contentType, filename }, openai) {
   try {
-    // 1. Download from Twilio
-    const buffer = await downloadFromTwilio(url);
+    const { buffer, filename: realFilename } = await downloadFromTwilio(url);
+    filename = realFilename || filename;
 
-    // 2. Extract invoice data
     const data = contentType.includes('pdf')
       ? await extractFromPdf(buffer, openai)
       : await extractFromImage(buffer, openai);
@@ -131,12 +104,10 @@ async function processAttachment({ url, contentType, filename }, openai) {
       throw new Error('Missing invoice_date or total in AI output');
     }
 
-    // 3. OneDrive (folder + file)
-    const graph    = await getGraphClient();
+    const graph = await getGraphClient();
     const folderId = await ensureYearMonthFolder(graph);
     await uploadFile(graph, folderId, filename, buffer);
 
-    // 4. CSV (create if missing, then append)
     const csvId = await ensureCsvFile(graph, folderId);
     await appendCsvRow(graph, csvId, [
       new Date().toISOString(),
@@ -147,18 +118,15 @@ async function processAttachment({ url, contentType, filename }, openai) {
       data.payment_method
     ]);
 
+    console.log(`✅ Final filename used for upload: ${filename}`);
     return { ok: true, filename };
   } catch (err) {
-    // ---- Added full error logging ----
     console.error(`❌ ${filename} FULL ERROR:`, err);
     console.error(`❌ ${filename} MESSAGE   :`, err.message);
     return { ok: false, filename, error: err.message };
   }
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
 async function downloadFromTwilio(url) {
   const res = await fetch(url, {
     headers: {
@@ -169,10 +137,24 @@ async function downloadFromTwilio(url) {
         ).toString('base64')
     }
   });
+
   if (!res.ok) {
     throw new Error(`Failed to download media: ${res.status} ${res.statusText}`);
   }
-  return Buffer.from(await res.arrayBuffer());
+
+  const buffer = Buffer.from(await res.arrayBuffer());
+
+  const disposition = res.headers.get('content-disposition');
+  let filename = url.split('/').pop(); // fallback
+
+  if (disposition) {
+    const match = disposition.match(/filename="(.+?)"/);
+    if (match && match[1]) {
+      filename = match[1];
+    }
+  }
+
+  return { buffer, filename };
 }
 
 async function extractFromImage(buffer, openai) {
@@ -204,7 +186,6 @@ async function extractFromImage(buffer, openai) {
 
   const parsed = JSON.parse(stripFence(response.choices[0].message.content));
 
-  // Map total_amount → total
   if (parsed.total_amount !== undefined && parsed.total === undefined) {
     parsed.total = parsed.total_amount;
     delete parsed.total_amount;
@@ -214,9 +195,7 @@ async function extractFromImage(buffer, openai) {
   return parsed;
 }
 
-
 async function extractFromPdf(buffer, openai) {
-  // 1. Send to external PDF text extractor
   const pdfRes = await fetch(process.env.PDF_EXTRACT_ENDPOINT, {
     method: 'POST',
     headers: { 'Content-Type': 'application/pdf' },
@@ -232,7 +211,6 @@ async function extractFromPdf(buffer, openai) {
   const extractedText = await pdfRes.text();
   console.log('EXTRACTED PDF TEXT (first 300):', extractedText.slice(0, 300));
 
-  // 2. Ask ChatGPT to pull out the fields
   const prompt = extractionPrompt();
   const response = await openai.chat.completions.create({
     model: 'gpt-4o-mini',
@@ -246,7 +224,6 @@ async function extractFromPdf(buffer, openai) {
 
   const parsed = JSON.parse(stripFence(response.choices[0].message.content));
 
-  // Map total_amount → total
   if (parsed.total_amount !== undefined && parsed.total === undefined) {
     parsed.total = parsed.total_amount;
     delete parsed.total_amount;
@@ -281,19 +258,9 @@ Example:
 `;
 }
 
-// ---------------------------------------------------------------------------
-// Improved stripFence helper
-// ---------------------------------------------------------------------------
 function stripFence(str = '') {
-  // 1. Remove zero‑width and non‑breaking spaces
   str = str.replace(/[\u200B-\u200D\uFEFF]/g, '');
-
-  // 2. Capture content between ```json ... ``` fences (or plain ``` ... ```)
   const match = str.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (match) {
-    return match[1].trim();
-  }
-
-  // 3. If no fences, just trim and return
+  if (match) return match[1].trim();
   return str.trim();
 }
