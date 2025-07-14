@@ -94,7 +94,7 @@ export default async function handler(req, res) {
 async function processAttachment({ url, contentType, filename }, openai) {
   try {
     const { buffer, filename: realFilename } = await downloadFromTwilio(url);
-    filename = realFilename || filename;
+    filename = sanitizeFilename(realFilename || filename);
 
     const data = contentType.includes('pdf')
       ? await extractFromPdf(buffer, openai)
@@ -155,6 +155,13 @@ async function downloadFromTwilio(url) {
   }
 
   return { buffer, filename };
+}
+
+function sanitizeFilename(filename = '') {
+  return filename
+    .replace(/[\/\\:*?"<>|#%]/g, '-')  // replace illegal/sensitive characters
+    .replace(/\s+/g, '_')              // replace spaces with _
+    .slice(0, 100);                    // trim to avoid long path issues
 }
 
 async function extractFromImage(buffer, openai) {
