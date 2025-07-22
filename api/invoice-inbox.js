@@ -105,7 +105,10 @@ async function processAttachment({ url, contentType, filename }, openai) {
     }
 
     const graph = await getGraphClient();
-    const folderId = await ensureYearMonthFolder(graph);
+
+    // ✏️ Changed: use invoice_date to choose folder
+    const folderId = await ensureYearMonthFolder(graph, data.invoice_date);
+
     await uploadFile(graph, folderId, filename, buffer);
 
     const csvId = await ensureCsvFile(graph, folderId);
