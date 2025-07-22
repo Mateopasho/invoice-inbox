@@ -54,9 +54,12 @@ export default async function handler(req, res) {
 
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const processedResults = await Promise.all(
-      toProcess.map(m => processAttachment(m, openai))
-    );
+    const processedResults = [];
+    for (const mediaItem of toProcess) {
+      const result = await processAttachment(mediaItem, openai);
+      processedResults.push(result);
+    }
+
 
     const results = [...preErrors, ...processedResults];
     const ok = results.filter(r => r.ok);
