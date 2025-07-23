@@ -96,11 +96,12 @@ export default async function handler(req, res) {
 
     const { replyBody } = await invoiceRes.json();
 
-    const formattedReply = `✅ Processed ${numMedia} file(s)\n\n${
-      media.map((m) => `• ${m.filename}`).join('\n')
-    }\n\n${replyBody || ''}`;
+    const formattedReply = replyBody
+    ? `✅ Processed:${replyBody}`
+    : '✅ Done.';
 
     await sendTwilioReply(replyTo, formattedReply.trim());
+
     res.status(200).end();
   } catch (err) {
     console.error('❌ Twilio webhook error:', err);
