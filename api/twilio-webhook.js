@@ -96,9 +96,8 @@ export default async function handler(req, res) {
 
     const { replyBody } = await invoiceRes.json();
 
-    const formattedReply = replyBody
-    ? `✅ Processed:${replyBody}`
-    : '✅ Done.';
+    const formattedReply = replyBody?.trim() || '✅ Done.';
+
 
     await sendTwilioReply(replyTo, formattedReply.trim());
 
