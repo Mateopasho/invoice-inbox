@@ -1,5 +1,3 @@
-// File: /api/twilio-webhook.js
-
 import fetch from 'node-fetch';
 import twilio from 'twilio';
 
@@ -8,6 +6,18 @@ export const config = {
     bodyParser: false, // Twilio sends application/x-www-form-urlencoded
   },
 };
+
+// Validate E.164 format
+function isValidWhatsAppNumber(number) {
+  return typeof number === 'string' && /^\+?[1-9]\d{6,14}$/.test(number);
+}
+
+// Fallback to trusted number if invalid
+function getSafeReplyNumber(from) {
+  return isValidWhatsAppNumber(from)
+    ? from
+    : process.env.TWILIO_REPLY_TO;
+}
 
 export default async function handler(req, res) {
   try {
@@ -30,8 +40,10 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Missing required Twilio fields' });
     }
 
+    const replyTo = getSafeReplyNumber(From);
+
     if (numMedia === 0) {
-      await sendTwilioReply(From, 'No attachment found in the message.');
+      await sendTwilioReply(replyTo, '📎 No attachment found in your message.');
       return res.status(200).end();
     }
 
@@ -50,7 +62,7 @@ export default async function handler(req, res) {
     );
 
     if (!mediaRes.ok) {
-      console.error('Failed to fetch media metadata:', await mediaRes.text());
+      console.error('❌ Failed to fetch media metadata:', await mediaRes.text());
       throw new Error(`Twilio media fetch failed: ${mediaRes.status}`);
     }
 
@@ -84,18 +96,26 @@ export default async function handler(req, res) {
 
     const { replyBody } = await invoiceRes.json();
 
-    await sendTwilioReply(From, replyBody || '✅ Done.');
+    const formattedReply = `✅ Processed ${numMedia} file(s)\n\n${
+      media.map((m) => `• ${m.filename}`).join('\n')
+    }\n\n${replyBody || ''}`;
+
+    await sendTwilioReply(replyTo, formattedReply.trim());
     res.status(200).end();
   } catch (err) {
-    console.error('Twilio webhook error:', err);
+    console.error('❌ Twilio webhook error:', err);
+
+    const fallbackTo = getSafeReplyNumber(req.body?.From || '');
+
     try {
       await sendTwilioReply(
-        req.body?.From || '+0000000000',
-        '⚠️ Error processing your message. Please try again.'
+        fallbackTo,
+        '⚠️ Error processing your message. Please try again later.'
       );
     } catch (twilioErr) {
-      console.error('Failed to send fallback reply:', twilioErr);
+      console.error('❌ Failed to send fallback reply:', twilioErr);
     }
+
     res.status(500).send('Internal Server Error');
   }
 }
