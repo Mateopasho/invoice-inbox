@@ -4,24 +4,56 @@ import { OpenAI } from 'openai';
 import { processAttachment } from '../lib/invoiceProcessor.js';
 import twilio from 'twilio';
 import * as Sentry from '@sentry/node'; // Sentry error monitoring
+import { ConfidentialClientApplication } from '@azure/msal-node'; // Azure MSAL for OAuth2
 
+// Sentry Initialization
 Sentry.init({ dsn: process.env.SENTRY_DSN }); // Initialize Sentry
 
-const imapConfig = {
-  host: 'outlook.office365.com',
-  port: 993,
-  secure: true,
+// OAuth2 setup for Azure
+const cca = new ConfidentialClientApplication({
   auth: {
-    user: process.env.OUTLOOK_EMAIL,
-    pass: process.env.OUTLOOK_PASSWORD // Consider switching to OAuth2
+    clientId: process.env.ONEDRIVE_CLIENT_ID, // Your existing env variable
+    clientSecret: process.env.ONEDRIVE_CLIENT_SECRET, // Your existing env variable
+    authority: `https://login.microsoftonline.com/${process.env.ONEDRIVE_TENANT_ID}`, // Your existing env variable
+  },
+});
+
+// Fetch OAuth2 Token from Microsoft Identity
+async function getAccessToken() {
+  const tokenRequest = {
+    scopes: ["https://outlook.office365.com/IMAP.AccessAsUser.All", "Mail.ReadWrite", "Mail.Read"],
+  };
+
+  try {
+    const response = await cca.acquireTokenByClientCredential(tokenRequest);
+    return response.accessToken; // Return the access token
+  } catch (error) {
+    console.error("❌ Error fetching access token:", error);
+    throw new Error('Failed to get access token');
   }
-};
+}
+
+// IMAP config using OAuth2
+async function getImapConfig() {
+  const accessToken = await getAccessToken();
+  return {
+    host: 'outlook.office365.com',
+    port: 993,
+    secure: true,
+    auth: {
+      type: 'OAuth2',
+      user: process.env.OUTLOOK_EMAIL, // Your existing env variable
+      accessToken, // OAuth2 token
+    },
+  };
+}
 
 const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
+  process.env.TWILIO_ACCOUNT_SID, // Your existing env variable
+  process.env.TWILIO_AUTH_TOKEN // Your existing env variable
 );
 
+// Send WhatsApp Notification
 async function sendWhatsAppNotification(filenames = []) {
   if (!process.env.NOTIFY_WHATSAPP_EMAIL_TO || filenames.length === 0) return;
 
@@ -30,9 +62,9 @@ async function sendWhatsAppNotification(filenames = []) {
 
   try {
     await twilioClient.messages.create({
-      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-      to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`,
-      body: message
+      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`, // Your existing env variable
+      to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`, // Your existing env variable
+      body: message,
     });
   } catch (err) {
     console.error('❌ WhatsApp Notification Error:', err);
@@ -40,20 +72,21 @@ async function sendWhatsAppNotification(filenames = []) {
   }
 }
 
+// Fetch emails using IMAP
 async function fetchEmails() {
-  const client = new ImapFlow(imapConfig);
+  const client = new ImapFlow(await getImapConfig());
 
   try {
     await client.connect();
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); // Your existing env variable
     const successfulFilenames = [];
 
     // Limit fetch to 100 messages at a time for rate-limiting
     const messages = client.fetch('1:100', {
       envelope: true,
       source: true,
-      bodyParts: ['BODY[]']
+      bodyParts: ['BODY[]'],
     });
 
     for await (const message of messages) {
@@ -84,7 +117,7 @@ async function fetchEmails() {
         const result = await processAttachment({
           buffer: attachment.content,
           filename: attachment.filename || 'attachment',
-          contentType: attachment.contentType || 'application/octet-stream'
+          contentType: attachment.contentType || 'application/octet-stream',
         }, openai);
 
         if (result.ok) {
@@ -103,7 +136,6 @@ async function fetchEmails() {
     Sentry.captureException(err); // Log error to Sentry
     throw err;
   } finally {
-    // Always make sure to close the IMAP connection
     try {
       await client.logout();
     } catch (err) {
@@ -119,7 +151,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
+  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`; // Your existing env variable
   const receivedAuth = req.headers.authorization || '';
 
   if (receivedAuth !== expectedAuth) {
@@ -131,15 +163,14 @@ export default async function handler(req, res) {
     const processed = await fetchEmails();
     res.status(200).json({
       message: 'Emails processed',
-      processed
+      processed,
     });
   } catch (err) {
     console.error('❌ Handler error:', err);
     Sentry.captureException(err); // Log error to Sentry
     res.status(500).json({
       error: 'Failed to process emails',
-      detail: err.message
+      detail: err.message,
     });
   }
 }
-
