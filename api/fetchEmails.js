@@ -23,8 +23,6 @@ async function getAccessToken() {
   const tokenRequest = {
     scopes: [
       "https://graph.microsoft.com/.default",
-      "IMAP.Access",  // Ensures that IMAP permissions are granted
-      "Mail.Read",    // Additional permissions for reading mail
     ],
   };
 
