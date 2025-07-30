@@ -40,7 +40,15 @@ async function getAccessToken() {
 // IMAP config using OAuth2
 async function getImapConfig() {
   const accessToken = await getAccessToken();
-  console.log("Access Token:", accessToken); // Log to verify token structure
+  console.log("Access Token:", accessToken); // Log token for debugging
+
+  // Log token details (decoded JWT) for debugging
+  try {
+    const decodedToken = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString());
+    console.log("Decoded Token:", decodedToken);  // Log the decoded token to verify scopes
+  } catch (error) {
+    console.error("Failed to decode token:", error);
+  }
 
   return {
     host: 'outlook.office365.com',
