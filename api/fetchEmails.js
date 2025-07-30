@@ -3,6 +3,9 @@ import { simpleParser } from 'mailparser';
 import { OpenAI } from 'openai';
 import { processAttachment } from '../lib/invoiceProcessor.js';
 import twilio from 'twilio';
+import * as Sentry from '@sentry/node'; // Sentry error monitoring
+
+Sentry.init({ dsn: process.env.SENTRY_DSN }); // Initialize Sentry
 
 const imapConfig = {
   host: 'outlook.office365.com',
@@ -10,7 +13,7 @@ const imapConfig = {
   secure: true,
   auth: {
     user: process.env.OUTLOOK_EMAIL,
-    pass: process.env.OUTLOOK_PASSWORD
+    pass: process.env.OUTLOOK_PASSWORD // Consider switching to OAuth2
   }
 };
 
@@ -25,24 +28,29 @@ async function sendWhatsAppNotification(filenames = []) {
   const message = `📬 The following invoice${filenames.length > 1 ? 's were' : ' was'} processed from your email:\n` +
     filenames.map(name => `• ${name}`).join('\n');
 
-  await twilioClient.messages.create({
-    from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-    to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`,
-    body: message
-  });
+  try {
+    await twilioClient.messages.create({
+      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+      to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`,
+      body: message
+    });
+  } catch (err) {
+    console.error('❌ WhatsApp Notification Error:', err);
+    Sentry.captureException(err); // Log error to Sentry
+  }
 }
 
 async function fetchEmails() {
   const client = new ImapFlow(imapConfig);
-  await client.connect();
-
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-  const successfulFilenames = [];
 
   try {
-    await client.selectMailbox('INBOX');
+    await client.connect();
 
-    const messages = client.fetch('1:*', {
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const successfulFilenames = [];
+
+    // Limit fetch to 100 messages at a time for rate-limiting
+    const messages = client.fetch('1:100', {
       envelope: true,
       source: true,
       bodyParts: ['BODY[]']
@@ -67,6 +75,12 @@ async function fetchEmails() {
       }
 
       for (const attachment of parsed.attachments) {
+        // Check attachment size to avoid memory overload (e.g., limit to 10MB)
+        if (attachment.content.length > 10 * 1024 * 1024) {
+          console.warn(`⚠️ Skipping large attachment: ${attachment.filename}`);
+          continue;
+        }
+
         const result = await processAttachment({
           buffer: attachment.content,
           filename: attachment.filename || 'attachment',
@@ -86,9 +100,15 @@ async function fetchEmails() {
     return successfulFilenames;
   } catch (err) {
     console.error('❌ IMAP Fetch Error:', err);
+    Sentry.captureException(err); // Log error to Sentry
     throw err;
   } finally {
-    await client.logout();
+    // Always make sure to close the IMAP connection
+    try {
+      await client.logout();
+    } catch (err) {
+      console.error('❌ IMAP Logout Error:', err);
+    }
   }
 }
 
@@ -115,6 +135,7 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('❌ Handler error:', err);
+    Sentry.captureException(err); // Log error to Sentry
     res.status(500).json({
       error: 'Failed to process emails',
       detail: err.message
