@@ -21,10 +21,9 @@ const cca = new ConfidentialClientApplication({
 // Fetch OAuth2 Token from Microsoft Identity
 async function getAccessToken() {
   const tokenRequest = {
+    // Correct scope for client credential flow
     scopes: [
-      "https://outlook.office365.com/.default", // Add .default
-      "Mail.ReadWrite",
-      "Mail.Read",
+      "https://graph.microsoft.com/.default" // This is the correct scope for app-level access
     ],
   };
 
@@ -36,6 +35,7 @@ async function getAccessToken() {
     throw new Error('Failed to get access token');
   }
 }
+
 
 
 // IMAP config using OAuth2
