@@ -1,4 +1,3 @@
-// pages/api/fetch-emails.js
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { OpenAI } from 'openai';
@@ -54,7 +53,6 @@ async function fetchEmails() {
 
       const parsed = await simpleParser(message.source);
 
-      // ✅ Pre-check to filter out irrelevant emails
       const hasAttachments = parsed.attachments?.length > 0;
       const hasInvoiceKeyword =
         parsed.subject?.toLowerCase().includes('invoice') ||
@@ -75,13 +73,16 @@ async function fetchEmails() {
           contentType: attachment.contentType || 'application/octet-stream'
         }, openai);
 
-        if (result.ok) successfulFilenames.push(result.filename);
+        if (result.ok) {
+          console.log(`✅ Processed attachment: ${result.filename}`);
+          successfulFilenames.push(result.filename);
+        } else {
+          console.warn(`⚠️ Failed to process attachment: ${result.filename}`);
+        }
       }
     }
 
-    // ✅ Only send WhatsApp message if something was processed
     await sendWhatsAppNotification(successfulFilenames);
-
     return successfulFilenames;
   } catch (err) {
     console.error('❌ IMAP Fetch Error:', err);
@@ -92,18 +93,28 @@ async function fetchEmails() {
 }
 
 export default async function handler(req, res) {
+  console.log('⏱️ Cron job triggered');
+
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
+  const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
+  const receivedAuth = req.headers.authorization || '';
+
+  if (receivedAuth !== expectedAuth) {
+    console.warn('❌ Unauthorized cron invocation');
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
   try {
     const processed = await fetchEmails();
-
     res.status(200).json({
       message: 'Emails processed',
       processed
     });
   } catch (err) {
+    console.error('❌ Handler error:', err);
     res.status(500).json({
       error: 'Failed to process emails',
       detail: err.message
