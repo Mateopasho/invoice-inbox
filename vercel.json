@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/fetch-emails.js": {
+      "runtime": "nodejs18.x"
+    }
+  },
+  "crons": [
+    {
+      "path": "/api/fetch-emails",
+      "schedule": "* * * * *"
+    }
+  ]
+}
