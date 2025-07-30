@@ -1,9 +1,4 @@
 {
-  "functions": {
-    "api/fetch-emails.js": {
-      "runtime": "nodejs18.x"
-    }
-  },
   "cron": [
     {
       "path": "/api/fetch-emails",
