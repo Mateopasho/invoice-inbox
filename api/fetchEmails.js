@@ -7,7 +7,7 @@ import * as Sentry from '@sentry/node'; // Sentry error monitoring
 import { ConfidentialClientApplication } from '@azure/msal-node'; // Azure MSAL for OAuth2
 
 // Sentry Initialization
-Sentry.init({ dsn: process.env.SENTRY_DSN }); 
+Sentry.init({ dsn: process.env.SENTRY_DSN });
 
 // OAuth2 setup for Azure
 const cca = new ConfidentialClientApplication({
@@ -22,7 +22,7 @@ const cca = new ConfidentialClientApplication({
 async function getAccessToken() {
   const tokenRequest = {
     scopes: [
-      "https://graph.microsoft.com/.default",
+      "https://graph.microsoft.com/.default",  // Default scope for accessing Microsoft Graph API
     ],
   };
 
@@ -40,13 +40,15 @@ async function getAccessToken() {
 // IMAP config using OAuth2
 async function getImapConfig() {
   const accessToken = await getAccessToken();
+  console.log("Access Token:", accessToken); // Log to verify token structure
+
   return {
     host: 'outlook.office365.com',
     port: 993,
     secure: true,
     auth: {
       type: 'XOAUTH2',
-      user: process.env.OUTLOOK_EMAIL, // Your existing env variable
+      user: process.env.OUTLOOK_EMAIL,  // Your Outlook email
       accessToken, // OAuth2 token
     },
   };
