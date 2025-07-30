@@ -7,7 +7,7 @@
   "crons": [
     {
       "path": "/api/fetchEmails",
-      "schedule": "* * * * *"
+      "schedule": "0 0 * * *" 
     }
   ]
 }
