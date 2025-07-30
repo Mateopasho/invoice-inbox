@@ -3,20 +3,21 @@ import { simpleParser } from 'mailparser';
 import { OpenAI } from 'openai';
 import { processAttachment } from '../lib/invoiceProcessor.js';
 import twilio from 'twilio';
-import * as Sentry from '@sentry/node'; // Sentry error monitoring
+import * as Sentry from '@sentry/node';
 
-// Sentry Initialization
+// Initialize Sentry for error monitoring
 Sentry.init({ dsn: process.env.SENTRY_DSN });
 
-// Twilio client for WhatsApp notifications
+// Initialize Twilio client for WhatsApp notifications
 const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID, 
-  process.env.TWILIO_AUTH_TOKEN 
+  process.env.TWILIO_ACCOUNT_SID,
+  process.env.TWILIO_AUTH_TOKEN
 );
 
-// Send WhatsApp Notification about processed invoices
+// Send WhatsApp notification about processed invoices
 async function sendWhatsAppNotification(filenames = []) {
-  if (!process.env.NOTIFY_WHATSAPP_EMAIL_TO || filenames.length === 0) return;
+  const recipient = process.env.TWILIO_REPLY_TO;
+  if (!recipient || filenames.length === 0) return;
 
   const message = `📬 The following invoice${filenames.length > 1 ? 's were' : ' was'} processed from your email:\n` +
     filenames.map(name => `• ${name}`).join('\n');
@@ -24,39 +25,38 @@ async function sendWhatsAppNotification(filenames = []) {
   try {
     await twilioClient.messages.create({
       from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
-      to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`,
+      to: `whatsapp:${recipient}`,
       body: message,
     });
   } catch (err) {
     console.error('❌ WhatsApp Notification Error:', err);
-    Sentry.captureException(err); // Log error to Sentry
+    Sentry.captureException(err);
   }
 }
 
-// Function to get IMAP config using App Password
+// Get IMAP configuration for Outlook using App Password
 async function getImapConfig() {
   return {
     host: 'outlook.office365.com',
     port: 993,
     secure: true,
     auth: {
-      user: process.env.OUTLOOK_EMAIL,  // Your Outlook email
-      pass: process.env.OUTLOOK_PASSWORD,  // App Password for authentication
+      user: process.env.OUTLOOK_EMAIL,
+      pass: process.env.OUTLOOK_PASSWORD,
     },
   };
 }
 
-// Function to fetch and process emails
+// Fetch and process emails from Outlook
 async function fetchEmails() {
   const client = new ImapFlow(await getImapConfig());
 
   try {
     await client.connect();
-
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const successfulFilenames = [];
 
-    // Limit fetch to 100 messages at a time
+    // Fetch up to 100 messages
     const messages = client.fetch('1:100', {
       envelope: true,
       source: true,
@@ -65,7 +65,6 @@ async function fetchEmails() {
 
     for await (const message of messages) {
       console.log('📧 Email received:', message.envelope.subject);
-
       const parsed = await simpleParser(message.source);
 
       const hasAttachments = parsed.attachments?.length > 0;
@@ -82,7 +81,7 @@ async function fetchEmails() {
       }
 
       for (const attachment of parsed.attachments) {
-        // Check attachment size to avoid memory overload (e.g., limit to 10MB)
+        // Skip large attachments (>10MB)
         if (attachment.content.length > 10 * 1024 * 1024) {
           console.warn(`⚠️ Skipping large attachment: ${attachment.filename}`);
           continue;
@@ -103,23 +102,23 @@ async function fetchEmails() {
       }
     }
 
-    // Send notification after successful processing
+    // Notify via WhatsApp after successful processing
     await sendWhatsAppNotification(successfulFilenames);
     return successfulFilenames;
   } catch (err) {
     console.error('❌ IMAP Fetch Error:', err);
-    Sentry.captureException(err); // Log error to Sentry
+    Sentry.captureException(err);
     throw err;
   } finally {
     try {
-      await client.logout(); // Ensure to logout and close the IMAP connection
+      await client.logout();
     } catch (err) {
       console.error('❌ IMAP Logout Error:', err);
     }
   }
 }
 
-// Cron handler for triggering email fetch
+// Cron job handler to trigger the email fetch
 export default async function handler(req, res) {
   console.log('⏱️ Cron job triggered');
 
@@ -127,7 +126,6 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // Validate the cron job invocation via Authorization header
   const expectedAuth = `Bearer ${process.env.CRON_SECRET}`;
   const receivedAuth = req.headers.authorization || '';
 
@@ -144,7 +142,7 @@ export default async function handler(req, res) {
     });
   } catch (err) {
     console.error('❌ Handler error:', err);
-    Sentry.captureException(err); // Log error to Sentry
+    Sentry.captureException(err);
     res.status(500).json({
       error: 'Failed to process emails',
       detail: err.message,
