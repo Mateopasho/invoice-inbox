@@ -22,7 +22,8 @@ const cca = new ConfidentialClientApplication({
 async function getAccessToken() {
   const tokenRequest = {
     scopes: [
-      "https://graph.microsoft.com/.default",  // Default scope for accessing Microsoft Graph API
+      "https://graph.microsoft.com/.default",
+      "Mail.Read",  // Default scope for accessing Microsoft Graph API
     ],
   };
 
