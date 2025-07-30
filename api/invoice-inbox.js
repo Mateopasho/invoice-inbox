@@ -1,6 +1,6 @@
 // pages/api/invoice-inbox.js
 import { OpenAI } from 'openai';
-import { processAttachment } from '../../lib/invoiceProcessor.js';
+import { processAttachment } from '../lib/invoiceProcessor.js';
 
 export default async function handler(req, res) {
   try {

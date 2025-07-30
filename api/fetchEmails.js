@@ -2,7 +2,7 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import { OpenAI } from 'openai';
-import { processAttachment } from '../../lib/invoiceProcessor.js';
+import { processAttachment } from '../lib/invoiceProcessor.js';
 import twilio from 'twilio';
 
 const imapConfig = {
