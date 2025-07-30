@@ -22,14 +22,15 @@ const cca = new ConfidentialClientApplication({
 async function getAccessToken() {
   const tokenRequest = {
     scopes: [
-      "https://graph.microsoft.com/.default", // Correct scope for app-level access
+      "https://outlook.office365.com/IMAP.AccessAsUser.All", // Correct scope for accessing IMAP
+      "Mail.ReadWrite" // Add this if you also want write access to mails
     ],
   };
 
   try {
     const response = await cca.acquireTokenByClientCredential(tokenRequest);
     console.log("✅ Access token fetched successfully");
-    return response.accessToken; // Returning the access token for authentication
+    return response.accessToken; // Return the access token for authentication
   } catch (error) {
     console.error("❌ Error fetching access token:", error);
     Sentry.captureException(error); // Log error to Sentry
