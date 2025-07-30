@@ -3,38 +3,35 @@ import { simpleParser } from 'mailparser';
 import { OpenAI } from 'openai';
 import { processAttachment } from '../lib/invoiceProcessor.js';
 import twilio from 'twilio';
-import * as Sentry from '@sentry/node';
 
-// Initialize Sentry for error monitoring
-Sentry.init({ dsn: process.env.SENTRY_DSN });
-
-// Initialize Twilio client for WhatsApp notifications
+// Twilio client for WhatsApp notifications
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
 
-// Send WhatsApp notification about processed invoices
+// Send WhatsApp Notification about processed invoices
 async function sendWhatsAppNotification(filenames = []) {
   const recipient = process.env.TWILIO_REPLY_TO;
-  if (!recipient || filenames.length === 0) return;
+  const sender = process.env.TWILIO_WHATSAPP_NUMBER;
+
+  if (!recipient || !sender || filenames.length === 0) return;
 
   const message = `📬 The following invoice${filenames.length > 1 ? 's were' : ' was'} processed from your email:\n` +
     filenames.map(name => `• ${name}`).join('\n');
 
   try {
     await twilioClient.messages.create({
-      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+      from: `whatsapp:${sender}`,
       to: `whatsapp:${recipient}`,
       body: message,
     });
   } catch (err) {
-    console.error('❌ WhatsApp Notification Error:', err);
-    Sentry.captureException(err);
+    console.error('❌ WhatsApp Notification Error:', err.message);
   }
 }
 
-// Get IMAP configuration for Outlook using App Password
+// Get IMAP configuration using Outlook App Password
 async function getImapConfig() {
   return {
     host: 'outlook.office365.com',
@@ -47,7 +44,7 @@ async function getImapConfig() {
   };
 }
 
-// Fetch and process emails from Outlook
+// Fetch and process emails
 async function fetchEmails() {
   const client = new ImapFlow(await getImapConfig());
 
@@ -56,7 +53,6 @@ async function fetchEmails() {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const successfulFilenames = [];
 
-    // Fetch up to 100 messages
     const messages = client.fetch('1:100', {
       envelope: true,
       source: true,
@@ -65,8 +61,8 @@ async function fetchEmails() {
 
     for await (const message of messages) {
       console.log('📧 Email received:', message.envelope.subject);
-      const parsed = await simpleParser(message.source);
 
+      const parsed = await simpleParser(message.source);
       const hasAttachments = parsed.attachments?.length > 0;
       const hasInvoiceKeyword =
         parsed.subject?.toLowerCase().includes('invoice') ||
@@ -81,7 +77,6 @@ async function fetchEmails() {
       }
 
       for (const attachment of parsed.attachments) {
-        // Skip large attachments (>10MB)
         if (attachment.content.length > 10 * 1024 * 1024) {
           console.warn(`⚠️ Skipping large attachment: ${attachment.filename}`);
           continue;
@@ -102,23 +97,21 @@ async function fetchEmails() {
       }
     }
 
-    // Notify via WhatsApp after successful processing
     await sendWhatsAppNotification(successfulFilenames);
     return successfulFilenames;
   } catch (err) {
-    console.error('❌ IMAP Fetch Error:', err);
-    Sentry.captureException(err);
+    console.error('❌ IMAP Fetch Error:', err.message);
     throw err;
   } finally {
     try {
       await client.logout();
     } catch (err) {
-      console.error('❌ IMAP Logout Error:', err);
+      console.error('❌ IMAP Logout Error:', err.message);
     }
   }
 }
 
-// Cron job handler to trigger the email fetch
+// HTTP Handler for Cron Job
 export default async function handler(req, res) {
   console.log('⏱️ Cron job triggered');
 
@@ -141,12 +134,10 @@ export default async function handler(req, res) {
       processed,
     });
   } catch (err) {
-    console.error('❌ Handler error:', err);
-    Sentry.captureException(err);
+    console.error('❌ Handler error:', err.message);
     res.status(500).json({
       error: 'Failed to process emails',
       detail: err.message,
     });
   }
 }
-
