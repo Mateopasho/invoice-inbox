@@ -6,15 +6,15 @@ import twilio from 'twilio';
 import * as Sentry from '@sentry/node'; // Sentry error monitoring
 import { ConfidentialClientApplication } from '@azure/msal-node'; // Azure MSAL for OAuth2
 
-// Initialize Sentry for error logging
+// Sentry Initialization
 Sentry.init({ dsn: process.env.SENTRY_DSN }); 
 
-// OAuth2 setup for Azure authentication
+// OAuth2 setup for Azure
 const cca = new ConfidentialClientApplication({
   auth: {
-    clientId: process.env.ONEDRIVE_CLIENT_ID, // App Registration Client ID from Azure
-    clientSecret: process.env.ONEDRIVE_CLIENT_SECRET, // App Registration Client Secret from Azure
-    authority: `https://login.microsoftonline.com/${process.env.ONEDRIVE_TENANT_ID}`, // Tenant ID for Azure OAuth
+    clientId: process.env.ONEDRIVE_CLIENT_ID, // Your existing env variable
+    clientSecret: process.env.ONEDRIVE_CLIENT_SECRET, // Your existing env variable
+    authority: `https://login.microsoftonline.com/${process.env.ONEDRIVE_TENANT_ID}`, // Your existing env variable
   },
 });
 
@@ -22,12 +22,13 @@ const cca = new ConfidentialClientApplication({
 async function getAccessToken() {
   const tokenRequest = {
     scopes: [
-      "https://graph.microsoft.com/.default", // Scope required for app-level access
+      "https://graph.microsoft.com/.default", // Correct scope for app-level access
     ],
   };
 
   try {
     const response = await cca.acquireTokenByClientCredential(tokenRequest);
+    console.log("✅ Access token fetched successfully");
     return response.accessToken; // Returning the access token for authentication
   } catch (error) {
     console.error("❌ Error fetching access token:", error);
@@ -36,7 +37,7 @@ async function getAccessToken() {
   }
 }
 
-// Config for IMAP connection using OAuth2
+// IMAP config using OAuth2
 async function getImapConfig() {
   const accessToken = await getAccessToken();
   return {
@@ -45,15 +46,15 @@ async function getImapConfig() {
     secure: true,
     auth: {
       type: 'XOAUTH2',
-      user: process.env.OUTLOOK_EMAIL, // Your Outlook email
-      accessToken, // Use the OAuth2 access token for authentication
+      user: process.env.OUTLOOK_EMAIL, // Your existing env variable
+      accessToken, // OAuth2 token
     },
   };
 }
 
 const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID, // Twilio Account SID
-  process.env.TWILIO_AUTH_TOKEN // Twilio Auth Token
+  process.env.TWILIO_ACCOUNT_SID, // Your existing env variable
+  process.env.TWILIO_AUTH_TOKEN // Your existing env variable
 );
 
 // Send WhatsApp Notification about processed invoices
@@ -97,7 +98,6 @@ async function fetchEmails() {
 
       const parsed = await simpleParser(message.source);
 
-      // Check if the email contains attachments and an "invoice" keyword
       const hasAttachments = parsed.attachments?.length > 0;
       const hasInvoiceKeyword =
         parsed.subject?.toLowerCase().includes('invoice') ||
@@ -111,7 +111,6 @@ async function fetchEmails() {
         continue;
       }
 
-      // Process each attachment
       for (const attachment of parsed.attachments) {
         // Check attachment size to avoid memory overload (e.g., limit to 10MB)
         if (attachment.content.length > 10 * 1024 * 1024) {
