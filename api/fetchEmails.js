@@ -4,68 +4,14 @@ import { OpenAI } from 'openai';
 import { processAttachment } from '../lib/invoiceProcessor.js';
 import twilio from 'twilio';
 import * as Sentry from '@sentry/node'; // Sentry error monitoring
-import { ConfidentialClientApplication } from '@azure/msal-node'; // Azure MSAL for OAuth2
 
 // Sentry Initialization
 Sentry.init({ dsn: process.env.SENTRY_DSN });
 
-// OAuth2 setup for Azure
-const cca = new ConfidentialClientApplication({
-  auth: {
-    clientId: process.env.ONEDRIVE_CLIENT_ID, // Your existing env variable
-    clientSecret: process.env.ONEDRIVE_CLIENT_SECRET, // Your existing env variable
-    authority: `https://login.microsoftonline.com/${process.env.ONEDRIVE_TENANT_ID}`, // Your existing env variable
-  },
-});
-
-// Function to fetch OAuth2 token
-async function getAccessToken() {
-  const tokenRequest = {
-    scopes: [
-      "https://graph.microsoft.com/.default",
-      "Mail.Read",  // Default scope for accessing Microsoft Graph API
-    ],
-  };
-
-  try {
-    const response = await cca.acquireTokenByClientCredential(tokenRequest);
-    console.log("✅ Access token fetched successfully");
-    return response.accessToken; // Returning the access token for authentication
-  } catch (error) {
-    console.error("❌ Error fetching access token:", error);
-    Sentry.captureException(error); // Log error to Sentry
-    throw new Error('Failed to get access token');
-  }
-}
-
-// IMAP config using OAuth2
-async function getImapConfig() {
-  const accessToken = await getAccessToken();
-  console.log("Access Token:", accessToken); // Log token for debugging
-
-  // Log token details (decoded JWT) for debugging
-  try {
-    const decodedToken = JSON.parse(Buffer.from(accessToken.split('.')[1], 'base64').toString());
-    console.log("Decoded Token:", decodedToken);  // Log the decoded token to verify scopes
-  } catch (error) {
-    console.error("Failed to decode token:", error);
-  }
-
-  return {
-    host: 'outlook.office365.com',
-    port: 993,
-    secure: true,
-    auth: {
-      type: 'XOAUTH2',
-      user: process.env.OUTLOOK_EMAIL,  // Your Outlook email
-      accessToken, // OAuth2 token
-    },
-  };
-}
-
+// Twilio client for WhatsApp notifications
 const twilioClient = twilio(
-  process.env.TWILIO_ACCOUNT_SID, // Your existing env variable
-  process.env.TWILIO_AUTH_TOKEN // Your existing env variable
+  process.env.TWILIO_ACCOUNT_SID, 
+  process.env.TWILIO_AUTH_TOKEN 
 );
 
 // Send WhatsApp Notification about processed invoices
@@ -77,14 +23,27 @@ async function sendWhatsAppNotification(filenames = []) {
 
   try {
     await twilioClient.messages.create({
-      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`, // WhatsApp number to send from
-      to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`, // Recipient's WhatsApp number
+      from: `whatsapp:${process.env.TWILIO_WHATSAPP_NUMBER}`,
+      to: `whatsapp:${process.env.NOTIFY_WHATSAPP_EMAIL_TO}`,
       body: message,
     });
   } catch (err) {
     console.error('❌ WhatsApp Notification Error:', err);
     Sentry.captureException(err); // Log error to Sentry
   }
+}
+
+// Function to get IMAP config using App Password
+async function getImapConfig() {
+  return {
+    host: 'outlook.office365.com',
+    port: 993,
+    secure: true,
+    auth: {
+      user: process.env.OUTLOOK_EMAIL,  // Your Outlook email
+      pass: process.env.OUTLOOK_PASSWORD,  // App Password for authentication
+    },
+  };
 }
 
 // Function to fetch and process emails
@@ -94,10 +53,10 @@ async function fetchEmails() {
   try {
     await client.connect();
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY }); // OpenAI API key
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
     const successfulFilenames = [];
 
-    // Limit fetch to 100 messages at a time for rate-limiting
+    // Limit fetch to 100 messages at a time
     const messages = client.fetch('1:100', {
       envelope: true,
       source: true,
@@ -164,7 +123,6 @@ async function fetchEmails() {
 export default async function handler(req, res) {
   console.log('⏱️ Cron job triggered');
 
-  // Verify the request method is GET
   if (req.method !== 'GET') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
@@ -193,5 +151,3 @@ export default async function handler(req, res) {
     });
   }
 }
-
-// ────────────────────────────────────────────────────────────
