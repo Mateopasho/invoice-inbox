@@ -48,7 +48,7 @@ export default async function handler(req, res) {
       `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
     ).toString('base64');
 
-    // Step 1: Fetch media list
+    // Step 1: Fetch media list from Twilio
     const mediaRes = await fetch(
       `https://api.twilio.com/2010-04-01/Accounts/${AccountSid}/Messages/${MessageSid}/Media.json`,
       {
@@ -62,57 +62,53 @@ export default async function handler(req, res) {
     }
 
     const mediaJson = await mediaRes.json();
-    const mediaList = mediaJson.media || [];
+    const mediaList = mediaJson.media_list || [];
 
-    // Step 2: Extract real filenames
     const media = [];
 
     for (let i = 0; i < mediaList.length; i++) {
       const m = mediaList[i];
-      const mediaUrl = `https://api.twilio.com${m.uri.replace('.json', '')}`;
+      const mediaUrl = m.url || `https://api.twilio.com${m.uri.replace('.json', '')}`;
 
-      // Fetch metadata (optional)
-      const metaRes = await fetch(m.uri, {
-        headers: { Authorization: `Basic ${auth}` },
-      });
-
-      const metadata = metaRes.ok ? await metaRes.json() : {};
-
-      // Fetch content headers for filename
-      const headersRes = await fetch(mediaUrl, {
-        method: 'HEAD',
-        headers: { Authorization: `Basic ${auth}` },
-      });
-
+      // Try to fetch headers for real filename
       let filename = `media_${i}`;
-      const contentDisp = headersRes.headers.get('content-disposition') || '';
-      const filenameMatch = contentDisp.match(/filename="([^"]+)"/);
+      let contentType = m.content_type || 'application/octet-stream';
 
-      if (filenameMatch) {
-        filename = filenameMatch[1];
-      } else if (metadata.sid) {
-        filename = metadata.sid;
+      try {
+        const headersRes = await fetch(mediaUrl, {
+          method: 'HEAD',
+          headers: { Authorization: `Basic ${auth}` },
+        });
+
+        const contentDisp = headersRes.headers.get('content-disposition') || '';
+        const filenameMatch = contentDisp.match(/filename="([^"]+)"/);
+        if (filenameMatch) {
+          filename = filenameMatch[1];
+        }
+
+        const contentTypeHeader = headersRes.headers.get('content-type');
+        if (contentTypeHeader) {
+          contentType = contentTypeHeader;
+        }
+      } catch (headErr) {
+        console.warn(`⚠️ Failed to fetch HEAD for media ${i}:`, headErr.message);
       }
 
       media.push({
         url: mediaUrl,
-        contentType: metadata.content_type || m.content_type || m.contentType,
+        contentType,
         filename,
       });
     }
 
-    // Step 3: Forward to invoice processor
+    // Step 2: Forward metadata to invoice-inbox
     const invoiceRes = await fetch(`${process.env.PUBLIC_URL}/api/invoice-inbox`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        from: From,
-        numMedia,
-        media,
-      }),
+      body: JSON.stringify({ from: From, numMedia, media }),
     });
 
-    let replyBody = '⚠️ Something went wrong.';
+    let replyBody = '⚠️ Unexpected error.';
 
     if (invoiceRes.ok) {
       try {
@@ -120,11 +116,11 @@ export default async function handler(req, res) {
         replyBody = result.replyBody?.trim() || '✅ Done.';
       } catch (err) {
         console.error('❌ Failed to parse JSON from invoice-inbox:', err);
-        replyBody = '⚠️ Could not understand invoice processor reply.';
+        replyBody = '⚠️ Could not parse response from invoice processor.';
       }
     } else {
-      const text = await invoiceRes.text();
-      console.error('❌ invoice-inbox error:', invoiceRes.status, text);
+      const errorText = await invoiceRes.text();
+      console.error(`❌ invoice-inbox failed (${invoiceRes.status}):`, errorText);
       replyBody = '⚠️ Invoice processor returned an error.';
     }
 
@@ -132,9 +128,7 @@ export default async function handler(req, res) {
     res.status(200).end();
   } catch (err) {
     console.error('❌ Twilio webhook error:', err);
-
     const fallbackTo = getSafeReplyNumber(req.body?.From || '');
-
     try {
       await sendTwilioReply(
         fallbackTo,
@@ -143,7 +137,6 @@ export default async function handler(req, res) {
     } catch (twilioErr) {
       console.error('❌ Failed to send fallback reply:', twilioErr);
     }
-
     res.status(500).send('Internal Server Error');
   }
 }
