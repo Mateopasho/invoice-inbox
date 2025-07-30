@@ -22,9 +22,7 @@ const cca = new ConfidentialClientApplication({
 async function getAccessToken() {
   const tokenRequest = {
     scopes: [
-      "https://outlook.office365.com/IMAP.AccessAsUser.All", // Correct IMAP scope
-      "Mail.ReadWrite", // Mail permissions
-      "Mail.Read"      // Mail permissions
+      "https://graph.microsoft.com/.default",
     ],
   };
 
