@@ -1,21 +1,24 @@
-import { ImapFlow } from 'imapflow';
-import { simpleParser } from 'mailparser';
-import { OpenAI } from 'openai';
-import { processAttachment } from '../lib/invoiceProcessor.js'; // Adjust path as needed
-import twilio from 'twilio';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+import { google } from 'googleapis';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
+import { OpenAI } from 'openai';
+import { processAttachment } from '../lib/invoiceProcessor.js'; // Adjust path as needed
+import twilio from 'twilio';
 
 dotenv.config();
+
+// Dynamically get the current directory (equivalent of __dirname in ES Modules)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // Twilio setup
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
   process.env.TWILIO_AUTH_TOKEN
 );
-
-const logError = true; // Toggle this to true/false to control error logging
 
 // Send WhatsApp notifications
 async function sendWhatsAppNotification(filenames = []) {
@@ -38,174 +41,185 @@ async function sendWhatsAppNotification(filenames = []) {
   }
 }
 
-// Get IMAP config with the fix for self-signed certificates
-async function getImapConfig() {
-  return {
-    host: 'imap.gmail.com',
-    port: 993,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD // Use an App Password if 2FA is enabled
-    },
-    socketTimeout: 120000, // Increased timeout for socket
-    connectionTimeout: 60000, // Increased timeout for connection
-    tls: {
-      rejectUnauthorized: false // Disable certificate validation (unsafe for production)
-    }
-  };
-}
+// Set up Gmail API OAuth2 client
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.WEB_CLIENT_ID,
+  process.env.WEB_CLIENT_SECRET,
+  process.env.WEB_REDIRECT_URIS
+);
 
-// Connect with retry logic
-async function connectWithRetry(client, retries = 5, delay = 2000) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await client.connect();
-      if (logError) console.log('📥 Successfully connected to IMAP');
-      return;
-    } catch (error) {
-      if (logError) console.error(`❌ Attempt ${attempt} failed:`, error.message);
-      if (attempt < retries) {
-        if (logError) console.log(`⏳ Retrying in ${delay / 1000} seconds...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        throw new Error('Exceeded maximum retry attempts');
-      }
+// Set credentials (using refresh token stored in .env)
+oAuth2Client.setCredentials({
+  refresh_token: process.env.WEB_REFRESH_TOKEN
+});
+
+// Initialize Gmail API
+const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+
+// Extract email body from parts
+function extractBody(parts) {
+  if (!parts) return null;
+
+  for (const part of parts) {
+    // Check if part is a text/plain or text/html
+    if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
+      return decodeBase64(part.body.data);
+    }
+
+    // If the part is multipart, recurse into its child parts
+    if (part.parts) {
+      const nestedBody = extractBody(part.parts);
+      if (nestedBody) return nestedBody;
     }
   }
+
+  return null;
 }
 
-// Safe fetch with retry for individual messages
-async function safeFetchOne(client, uid) {
-  try {
-    const message = await client.fetchOne(uid, { envelope: true, source: true, bodyParts: ['BODY[]'] });
-    return message;
-  } catch (err) {
-    if (logError) {
-      console.error(`❌ Error fetching UID ${uid}:`, err.message);
-      console.log('🔄 Attempting to reconnect...');
-    }
-
-    const newClient = new ImapFlow(await getImapConfig());
-    await connectWithRetry(newClient);
-
-    try {
-      const message = await newClient.fetchOne(uid, { envelope: true, source: true, bodyParts: ['BODY[]'] });
-      return message;
-    } catch (reconnectErr) {
-      if (logError) console.error(`❌ Error fetching UID ${uid} after reconnect:`, reconnectErr.message);
-      return null;
-    }
-  }
-}
-
-// Save attachment to disk
-function saveAttachment(attachment) {
-  const filePath = path.join(__dirname, 'attachments', attachment.filename);
-  fs.writeFileSync(filePath, attachment.content);
-  if (logError) console.log(`✅ Saved attachment: ${attachment.filename}`);
+// Function to decode base64 email body data
+function decodeBase64(data) {
+  const buffer = Buffer.from(data, 'base64');
+  return buffer.toString('utf-8');
 }
 
 // Main function to fetch and process emails
 export async function fetchEmails() {
-  const client = new ImapFlow(await getImapConfig());
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  const successfulFilenames = [];
+
+  // Define the sender email address you want to filter by
+  const senderEmail = 'test.mateo@outlook.com'; // Replace with the actual sender's email
+
+  // Get the current date and time
+  const currentDate = new Date();
+
+  // Subtract 24 hours
+  currentDate.setHours(currentDate.getHours() - 2400);
+
+  // Format the date as YYYY/MM/DD
+  const date24HoursAgo = currentDate.toISOString().split('T')[0];  // This will give us 'YYYY-MM-DD'
+
+  // Replace dashes with slashes to match Gmail's format
+  const formattedDate = date24HoursAgo.replace(/-/g, '/');
 
   try {
-    console.log('📥 Connecting to IMAP...');
-    await connectWithRetry(client);
+    console.log('📥 Fetching emails from the last 24 hours from Gmail API...');
 
-    console.log('📂 Opening INBOX...');
-    await client.mailboxOpen('INBOX');
+    // Fetch the latest emails from the specific sender in the last 24 hours
+    const res = await gmail.users.messages.list({
+      userId: 'me',
+      maxResults: 100,
+      q: `from:${senderEmail} after:${formattedDate}` // Filter for emails from the specific sender in the last 24 hours
+    });
 
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-    const successfulFilenames = [];
-
-    const searchResult = await client.search({ seen: false });
-    console.log('📩 Unread emails found:', searchResult.length);
-
-    if (searchResult.length === 0) {
-      console.log('📭 No unread messages found.');
+    const messages = res.data.messages;
+    if (!messages || messages.length === 0) {
+      console.log('📭 No new emails found in the last 24 hours.');
       return [];
     }
 
-    const sortedEmails = searchResult.sort((a, b) => b - a);
-    console.log('📩 Sorted emails by date (newest first):', sortedEmails);
-
-    const limitedEmails = sortedEmails.slice(0, 10);
-    console.log(`📩 Limiting to the latest 10 emails: ${limitedEmails.length}`);
-
-    for (let i = 0; i < limitedEmails.length; i++) {
-      const uid = limitedEmails[i];
-
+    // Process each message
+    for (const message of messages) {
       try {
-        const message = await safeFetchOne(client, uid);
-        if (!message) {
-          console.log(`❌ Skipping UID ${uid} due to previous fetch error.`);
-          continue;
-        }
-
-        console.log('📧 Email received:', message.envelope.subject);
-        console.log('🔍 From:', message.envelope.from);
-        console.log('🔍 Subject:', message.envelope.subject);
-
-        const parsed = await simpleParser(message.source);
-        const attachments = parsed.attachments || [];
-
-        if (attachments.length === 0) {
-          console.log('🛑 Skipping email — no attachments');
-          continue;
-        }
-
-        console.log(`📎 Attachments found: ${attachments.length}`);
-        attachments.forEach(attachment => {
-          console.log(`📎 Attachment: ${attachment.filename}, Size: ${attachment.content.length} bytes`);
-          saveAttachment(attachment);
+        const msgRes = await gmail.users.messages.get({
+          userId: 'me',
+          id: message.id
         });
 
-        for (const attachment of attachments) {
-          if (attachment.content.length > 10 * 1024 * 1024) {
-            console.warn(`⚠️ Skipping large attachment: ${attachment.filename}`);
-            continue;
-          }
+        const msg = msgRes.data;
+        const headers = msg.payload.headers;
+        const parts = msg.payload.parts;
 
+        // Extract metadata: From, To, Subject, Date
+        const from = headers.find(header => header.name === 'From').value;
+        const subject = headers.find(header => header.name === 'Subject').value;
+        const date = headers.find(header => header.name === 'Date').value;
+
+        console.log('📬 Email Metadata:');
+        console.log(`From: ${from}`);
+        console.log(`Subject: ${subject}`);
+        console.log(`Date: ${new Date(date).toString()}`);
+
+        // Extract and print the email body (handle multipart parts)
+        const body = extractBody(parts);
+        console.log('\n📬 Full Body Structure:', body || 'No body content found');
+
+        // Extract attachments
+        const attachments = msg.payload.parts ? msg.payload.parts.filter(part => part.filename) : [];
+
+        if (attachments.length === 0) {
+          console.log('🛑 No attachments found.');
+          continue;
+        }
+
+        console.log(`📎 Found ${attachments.length} attachment(s):`);
+        attachments.forEach(attachment => {
+          console.log(`📎 Attachment: ${attachment.filename}`);
+          console.log(`MimeType: ${attachment.mimeType}`);  // Added for debugging
+        });
+
+        // Ensure the 'attachments' directory exists before saving the file
+        const attachmentsDir = path.join(__dirname, 'attachments');
+        if (!fs.existsSync(attachmentsDir)) {
+          fs.mkdirSync(attachmentsDir); // Create the directory if it doesn't exist
+        }
+
+        // Process each attachment
+        for (const attachment of attachments) {
+          const attachmentData = await gmail.users.messages.attachments.get({
+            userId: 'me',
+            messageId: message.id,
+            id: attachment.body.attachmentId
+          });
+
+          const buffer = Buffer.from(attachmentData.data.data, 'base64');
+          const filePath = path.join(attachmentsDir, attachment.filename);
+          fs.writeFileSync(filePath, buffer);
+          console.log(`✅ Saved attachment: ${attachment.filename}`);
+
+          // Process the attachment
+          console.log(`📝 Sending to OpenAI for processing: ${attachment.filename}`);
           const result = await processAttachment({
-            buffer: attachment.content,
-            filename: attachment.filename || 'attachment',
-            contentType: attachment.contentType || 'application/octet-stream',
+            buffer: buffer,
+            filename: attachment.filename,
+            contentType: attachment.mimeType,
           }, openai);
 
           if (result.ok) {
-            console.log(`✅ Successfully processed: ${result.filename}`);
+            console.log(`✅ Successfully processed: ${attachment.filename}`);
             successfulFilenames.push(result.filename);
           } else {
-            console.warn(`❌ Failed to process: ${result.filename}`);
+            console.warn(`❌ Failed to process: ${attachment.filename}`, result.error);
           }
         }
 
-        await client.messageFlagsAdd(message.uid, ['\\Seen']);
+        // Mark email as read
+        await gmail.users.messages.modify({
+          userId: 'me',
+          id: message.id,
+          resource: {
+            removeLabelIds: ['UNREAD']
+          }
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second delay
+
       } catch (err) {
-        console.error(`❌ Error processing UID ${uid}:`, err.message);
-        continue;
+        console.error('❌ Error processing message:', err.message);
       }
-
-      await new Promise(resolve => setTimeout(resolve, 1000)); // 1-second delay
     }
 
-    if (successfulFilenames.length === 0) {
-      console.log('📭 No messages processed.');
+    // Send WhatsApp notification with processed filenames
+    if (successfulFilenames.length > 0) {
+      await sendWhatsAppNotification(successfulFilenames);
+      console.log('✅ Done. Processed files:', successfulFilenames);
+    } else {
+      console.log('📭 No files were processed.');
     }
 
-    await sendWhatsAppNotification(successfulFilenames);
-    console.log('✅ Done. Processed files:', successfulFilenames);
     return successfulFilenames;
   } catch (err) {
-    console.error('❌ IMAP Fetch Error:', err.message);
+    console.error('❌ Error fetching emails:', err.message);
     throw err;
-  } finally {
-    try {
-      await client.logout();
-    } catch (err) {
-      console.error('❌ Logout error:', err.message);
-    }
   }
 }

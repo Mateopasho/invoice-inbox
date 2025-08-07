@@ -1,181 +1,130 @@
-import { ImapFlow } from 'imapflow';
+import { google } from 'googleapis';
 import dotenv from 'dotenv';
 import fs from 'fs';
 import path from 'path';
 
+// Load environment variables from .env file
 dotenv.config();
 
-// Function to get IMAP configuration
-async function getImapConfig() {
-  return {
-    host: 'imap.gmail.com',
-    port: 993,
-    secure: true,
-    auth: {
-      user: process.env.EMAIL_USER,
-      pass: process.env.EMAIL_PASSWORD, // Use App Password if 2FA is enabled
-    },
-    socketTimeout: 60000,
-    connectionTimeout: 30000,
-  };
-}
+// Set up Gmail API OAuth2 client
+const oAuth2Client = new google.auth.OAuth2(
+  process.env.WEB_CLIENT_ID,
+  process.env.WEB_CLIENT_SECRET,
+  process.env.WEB_REDIRECT_URIS
+);
 
-// Function to connect to the IMAP server with retries
-async function connectWithRetry(client, retries = 5, delay = 2000) {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await client.connect();
-      console.log('📥 Successfully connected to IMAP');
-      return;
-    } catch (error) {
-      console.error(`❌ Attempt ${attempt} failed:`, error.message);
-      if (attempt < retries) {
-        console.log(`⏳ Retrying in ${delay / 1000} seconds...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      } else {
-        throw new Error('Exceeded maximum retry attempts');
-      }
-    }
-  }
-}
+// Set credentials (using refresh token stored in .env)
+oAuth2Client.setCredentials({
+  refresh_token: process.env.WEB_REFRESH_TOKEN
+});
 
-// Function to download attachments
-async function downloadAttachment(client, uid, partId, fileName) {
+// Initialize Gmail API
+const gmail = google.gmail({ version: 'v1', auth: oAuth2Client });
+
+async function getEmails() {
   try {
-    const { meta, content } = await client.download(uid, partId);
-    const filePath = path.join(__dirname, fileName);
-    const writeStream = fs.createWriteStream(filePath);
-
-    content.pipe(writeStream);
-    writeStream.on('finish', () => {
-      console.log(`📝 Attachment saved to ${filePath}`);
+    // Fetch the latest 5 threads
+    const res = await gmail.users.messages.list({
+      userId: 'me',
+      maxResults: 5,
+      q: 'is:unread' // Optional: filter by unread emails, can be adjusted
     });
-    return filePath; // Return the file path of the downloaded attachment
-  } catch (err) {
-    console.error('❌ Error downloading attachment:', err.message);
-    return null;
-  }
-}
 
-// Function to fetch all email parts (text, HTML, attachments, etc.)
-async function fetchAllEmailParts(client, uid) {
-  const message = await client.fetchOne(uid, {
-    envelope: true,
-    bodyStructure: true, // Fetch body structure to inspect all parts
-  }).catch(err => {
-    console.error(`❌ Error fetching UID ${uid}:`, err);
-    return null;
-  });
-
-  if (!message || !message.bodyStructure) {
-    console.log('❌ Could not fetch the email or missing body structure');
-    return null;
-  }
-
-  // Log the email metadata
-  console.log("📬 Email Metadata:");
-  console.log(`From: ${message.envelope.from[0].address}`);
-  console.log(`To: ${message.envelope.to[0].address}`);
-  console.log(`Subject: ${message.envelope.subject}`);
-  console.log(`Date: ${message.envelope.date}`);
-
-  // Recursively fetch all parts
-  const parts = message.bodyStructure.parts || [];
-  let allParts = [];
-
-  for (let part of parts) {
-    if (part.parts) {
-      // Recursively handle nested parts
-      allParts = allParts.concat(await fetchAllEmailParts(client, uid)); 
-    } else {
-      allParts.push(part);
-    }
-  }
-
-  // Log full body structure for inspection
-  console.log("📬 Full Body Structure:", JSON.stringify(message.bodyStructure, null, 2));
-
-  return allParts;
-}
-
-// Function to print email body
-async function printEmailBody(allParts) {
-  for (let part of allParts) {
-    if (part.type === 'text/plain' || part.type === 'text/html') {
-      const encoding = part.encoding === 'base64' ? 'base64' : 'quoted-printable';
-      const bodyContent = await decodeBody(part, encoding);
-      console.log(`\n📬 Body Content (${part.type}):\n`);
-      console.log(bodyContent);
-    }
-  }
-}
-
-// Function to decode body based on encoding
-async function decodeBody(part, encoding) {
-  const contentBuffer = Buffer.from(part.body, encoding); // Decode based on encoding type
-  return contentBuffer.toString('utf8'); // Decode the buffer to string (assuming UTF-8)
-}
-
-// Function to fetch and process emails and attachments
-export async function fetchEmails() {
-  const client = new ImapFlow(await getImapConfig());
-  const processedFiles = [];
-
-  try {
-    console.log('📥 Connecting to IMAP...');
-    await connectWithRetry(client);
-
-    console.log('📂 Opening INBOX...');
-    await client.mailboxOpen('INBOX');
-
-    const searchResult = await client.search({ seen: false });
-    console.log('📩 Unread emails found:', searchResult.length);
-
-    if (searchResult.length === 0) {
-      console.log('📭 No unread messages found.');
-      return processedFiles; // Return the empty array if no unread emails
+    const messages = res.data.messages;
+    if (!messages || messages.length === 0) {
+      console.log('No emails found!');
+      return;
     }
 
-    for (let uid of searchResult) {
-      console.log(`📬 Fetching email UID: ${uid}`);
+    // Process each message
+    for (const message of messages) {
+      const msgRes = await gmail.users.messages.get({
+        userId: 'me',
+        id: message.id
+      });
 
-      // Fetch all available body parts and metadata
-      const allParts = await fetchAllEmailParts(client, uid);
+      const msg = msgRes.data;
+      const headers = msg.payload.headers;
+      const parts = msg.payload.parts;
 
-      if (allParts.length > 0) {
-        console.log('📝 Raw email body parts:');
+      // Extract metadata: From, To, Subject, Date
+      const from = headers.find(header => header.name === 'From').value;
+      const to = headers.find(header => header.name === 'To').value;
+      const subject = headers.find(header => header.name === 'Subject').value;
+      const date = headers.find(header => header.name === 'Date').value;
 
-        // Print the body content of the email (plain text or HTML)
-        await printEmailBody(allParts);
+      // Print Email Metadata
+      console.log('\n=====================================');
+      console.log('📬 Email Metadata:');
+      console.log(`From: ${from}`);
+      console.log(`To: ${to}`);
+      console.log(`Subject: ${subject}`);
+      console.log(`Date: ${new Date(date).toString()}`);
 
-        // Check for attachments and download them
-        for (let part of allParts) {
-          if (part.disposition && part.disposition.type === 'ATTACHMENT') {
-            const fileName = part.disposition.params.filename;
-            const partId = `${part.partId}`;
-            console.log(`📎 Found attachment: ${fileName}`);
-            const filePath = await downloadAttachment(client, uid, partId, fileName);
-            if (filePath) {
-              processedFiles.push(filePath); // Add the downloaded file path to the result array
-            }
+      // Extract and print the email body (handle multipart parts)
+      const body = extractBody(parts);
+      console.log('\n📬 Full Body Structure:');
+      console.log(body || 'No body content found');
+
+      // Check if there are attachments
+      if (parts) {
+        let attachmentCount = 0;
+        for (const part of parts) {
+          if (part.filename && part.body.attachmentId) {
+            const attachment = await gmail.users.messages.attachments.get({
+              userId: 'me',
+              messageId: message.id,
+              id: part.body.attachmentId
+            });
+
+            // Save the attachment (e.g., as a PDF or image)
+            const attachmentData = attachment.data;
+            const __dirname = new URL('.', import.meta.url).pathname; // Fix for ES Modules
+            const filePath = path.join(__dirname, part.filename);
+            fs.writeFileSync(filePath, attachmentData.data, 'base64');
+            console.log(`🗂️ Attachment saved: ${filePath}`);
+            attachmentCount++;
           }
         }
-      } else {
-        console.log('🛑 No email parts found');
+
+        if (attachmentCount === 0) {
+          console.log('📂 No attachments found.');
+        }
       }
+
+      // Print a line to separate emails
+      console.log('\n=====================================\n');
     }
-  } catch (err) {
-    console.error('❌ IMAP Fetch Error:', err.message);
-  } finally {
-    try {
-      await client.logout();
-    } catch (err) {
-      console.error('❌ Logout error:', err.message);
+  } catch (error) {
+    console.error('Error fetching emails:', error);
+  }
+}
+
+// Function to extract the body from email parts
+function extractBody(parts) {
+  if (!parts) return null;
+
+  for (const part of parts) {
+    // Check if part is a text/plain or text/html
+    if (part.mimeType === 'text/plain' || part.mimeType === 'text/html') {
+      return decodeBase64(part.body.data);
+    }
+
+    // If the part is multipart, recurse into its child parts
+    if (part.parts) {
+      const nestedBody = extractBody(part.parts);
+      if (nestedBody) return nestedBody;
     }
   }
 
-  return processedFiles; // Return the list of processed files
+  return null;
 }
 
-// Run the function to fetch and process emails with attachments
-fetchEmails();
+// Function to decode base64 email body data
+function decodeBase64(data) {
+  const buffer = Buffer.from(data, 'base64');
+  return buffer.toString('utf-8');
+}
+
+// Call the function to get emails
+getEmails();

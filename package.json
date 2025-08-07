@@ -16,7 +16,9 @@
     "mailparser": "^2.8.1",
     "node-fetch": "^3.3.0",
     "openai": "^4.104.0",
+    "pdf-parse": "^1.1.1",
     "poplib": "^0.1.7",
+    "readline-sync": "^1.4.10",
     "twilio": "^4.23.0"
   }
 }

@@ -1,24 +1,45 @@
-import axios from 'axios';
+import { google } from 'googleapis';
 import dotenv from 'dotenv';
+import readlineSync from 'readline-sync';
 
 // Load environment variables
 dotenv.config();
 
-async function getAccessToken(authCode) {
-  const response = await axios.post('https://login.microsoftonline.com/common/oauth2/v2.0/token', new URLSearchParams({
-    client_id: process.env.CLIENT_ID,
-    client_secret: process.env.CLIENT_SECRET,
-    code: authCode,
-    redirect_uri: 'http://localhost:5500', // Ensure this matches the redirect URI in your app
-    grant_type: 'authorization_code'
-  }));
+const clientId = process.env.WEB_CLIENT_ID;
+const clientSecret = process.env.WEB_CLIENT_SECRET;
+const redirectUris = process.env.WEB_REDIRECT_URIS.split(',');
 
-  const { access_token, refresh_token } = response.data;
+// Set up the OAuth2 client
+const oAuth2Client = new google.auth.OAuth2(
+  clientId,
+  clientSecret,
+  redirectUris[0]  // Assuming you have one redirect URI
+);
 
-  console.log('Access Token:', access_token);
-  console.log('Refresh Token:', refresh_token);
+// Generate an authentication URL
+const scopes = ['https://www.googleapis.com/auth/gmail.readonly'];
+const authUrl = oAuth2Client.generateAuthUrl({
+  access_type: 'offline',  // Request offline access to get a refresh token
+  scope: scopes,
+});
 
-  // You can now use the access token to authenticate with Microsoft Graph
+console.log('Authorize this app by visiting this url:', authUrl);
+
+// Get the authorization code from the user
+const code = readlineSync.question('Enter the code from that page here: ');
+
+// Exchange the code for tokens
+async function getTokens() {
+  try {
+    const { tokens } = await oAuth2Client.getToken(code);
+    oAuth2Client.setCredentials(tokens);
+
+    console.log('Tokens acquired:');
+    console.log('Access Token:', tokens.access_token);
+    console.log('Refresh Token:', tokens.refresh_token); // This is the refresh token!
+  } catch (error) {
+    console.error('Error exchanging code for token:', error);
+  }
 }
 
-getAccessToken('<YOUR_AUTHORIZATION_CODE>');
+getTokens();
