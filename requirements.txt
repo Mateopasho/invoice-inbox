@@ -1,0 +1,8 @@
+dotenv
+openai
+twilio
+@microsoft/microsoft-graph-client
+@azure/identity
+isomorphic-fetch
+fast-csv
+vercel
