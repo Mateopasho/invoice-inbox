@@ -1,20 +1,26 @@
-# Invoice Inbox (Vercel)
+## Flow (What Happens)
+1) **Extraction**
+   - **WhatsApp (Twilio Sandbox):** Twilio hits the deployed webhook → downloads the media URL → forwards the file for processing.
+   - **Email (Google API):** Local script fetches the newest email with attachments → forwards each file for processing.
+     - One-time **token generation** is required: this is automated from `getAuthCode.js` its gets a refresh code from Google app in the permited url for testing.
 
-A serverless API that:
+2) **Processing (OpenAI)**
+   - File → OpenAI → returns structured JSON (supplier, invoice number, date, totals, etc.).
 
-1. Receives JSON from n8n (Twilio webhook proxy)
-2. Downloads WhatsApp media from Twilio
-3. Extracts invoice data with OpenAI (Vision for images, Chat for PDFs)
-4. Saves the original file to OneDrive under `YYYY.MM/`
-5. Appends a row to `invoices.csv` inside that folder (creates the file if missing)
-6. Returns a `replyBody` string for n8n to send back to the WhatsApp user
+3) **Storage (OneDrive)**
+   - Upload original file to target folder (e.g., `YYYY.MM/`).
+   - Append a row to `invoices.csv` in that folder.
 
----
+## Files That Matter
+- **API/Webhook**
+  - `api/index.js` — Twilio webhook handler (downloads media, calls processor, returns short reply).
+- **Email**
+  - `getAuthCode.js` — Google OAuth **token generator** (creates `token.json` from `credentials.json`).
+  - `fetchFirstEmail.js` — Fetches newest email + attachments via Gmail API.
+- **Processing & Storage**
+  - `lib/openai.js` — Runs extraction and returns normalized JSON.
+  - `lib/graph.js` — Uploads file + updates `invoices.csv` in OneDrive.
+  - `lib/csv.js` — Appends a row to the CSV.
 
-## Local dev
-
-```bash
-npm install
-vercel dev
-Set your environment variables locally (or create a .env file) before running.
-```
+> Not necessary in production: `test-fetchEmails.js` (dev only).  
+> Not needed in git: `api/attachments/` (ignore/remove if unused).
