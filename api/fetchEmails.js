@@ -94,7 +94,7 @@ export async function fetchEmails() {
   const currentDate = new Date();
 
   // Subtract 24 hours
-  currentDate.setHours(currentDate.getHours() - 24);
+  currentDate.setHours(currentDate.getHours() - 2424);
 
   // Format the date as YYYY/MM/DD
   const date24HoursAgo = currentDate.toISOString().split('T')[0];  // This will give us 'YYYY-MM-DD'

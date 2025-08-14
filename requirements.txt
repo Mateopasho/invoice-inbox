@@ -6,3 +6,4 @@ twilio
 isomorphic-fetch
 fast-csv
 vercel
+chokidar
