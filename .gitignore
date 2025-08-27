@@ -23,7 +23,7 @@ coverage/
 # Vercel / Now
 .vercel/
 .now/
-
+/local_out
 # API attachments (unused)
 /api/attachments/*
 !/api/attachments/.gitkeep

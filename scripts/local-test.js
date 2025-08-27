@@ -2,12 +2,12 @@
 /**
  * scripts/local-test.js
  *
- * A single-file, local-only version of your pipeline:
- * - Watches ATTACHMENTS_DIR for new files (same as your watcher)
- * - Extracts data (OpenAI Vision for images, PDF → text → OpenAI for PDFs)
- * - Stores the original file under OUTPUT_DIR/YYYY.MM/
+ * Local-only pipeline:
+ * - Watches ATTACHMENTS_DIR for new files
+ * - Extracts data (OpenAI Vision for images, pdf-parse → OpenAI for PDFs)
+ * - Stores original file under OUTPUT_DIR/YYYY.MM/
  * - Appends a row to OUTPUT_DIR/YYYY.MM/invoices.csv
- * - Moves the source file to <attachments>/processed or <attachments>/failed
+ * - Moves source file to <attachments>/processed or <attachments>/failed
  *
  * Env:
  *   ATTACHMENTS_DIR=api/attachments   (default)
@@ -23,6 +23,11 @@ import fssync from 'fs';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import { OpenAI } from 'openai';
+import { createRequire } from 'module';           // ← add this
+const require = createRequire(import.meta.url);   // ← and this
+
+// Load CJS pdf-parse via require to avoid ESM interop issues
+const pdfParse = require('pdf-parse');            // ← real function export
 
 dotenv.config();
 
@@ -41,7 +46,7 @@ const REQUIRE_AI = true; // set to false if you add your own regex fallback late
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // ────────────────────────────────────────────────────────────
-// Utilities (same spirit as your current code)
+// Utilities
 // ────────────────────────────────────────────────────────────
 async function ensureDirs() {
   for (const d of [ATTACHMENTS_DIR, PROCESSED_DIR, FAILED_DIR, OUTPUT_DIR]) {
@@ -93,7 +98,6 @@ async function getUniqueDest(dir, filename) {
   if (!fssync.existsSync(dest)) return dest;
   const { name, ext } = path.parse(filename);
   let i = 1;
-  // eslint-disable-next-line no-constant-condition
   while (true) {
     const candidate = path.join(dir, `${name}-${i}${ext}`);
     if (!fssync.existsSync(candidate)) return candidate;
@@ -102,7 +106,7 @@ async function getUniqueDest(dir, filename) {
 }
 
 // ────────────────────────────────────────────────────────────
-/** Local “storage” (mirrors your OneDrive+csvDrive API shape) */
+// Local “storage” (mirrors your OneDrive+csvDrive API shape)
 // ────────────────────────────────────────────────────────────
 async function getGraphClient() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
@@ -114,10 +118,9 @@ async function ensureYearMonthFolder(_client, invoiceDate) {
   if (Number.isNaN(d.getTime())) throw new Error(`Bad invoice_date: ${invoiceDate}`);
   const year = String(d.getFullYear());
   const month = String(d.getMonth() + 1).padStart(2, '0');
-  // Your OneDrive code uses "YYYY.MM"
   const folderPath = path.join(OUTPUT_DIR, `${year}.${month}`);
   if (!fssync.existsSync(folderPath)) await fs.mkdir(folderPath, { recursive: true });
-  return folderPath; // acts like folderId
+  return folderPath;
 }
 
 async function uploadFile(_client, folderId, filename, buffer, mime = 'application/octet-stream') {
@@ -134,7 +137,7 @@ async function ensureCsvFile(_graph, folderId) {
     ].map(cols => cols.join(',')).join('\n') + '\n';
     await fs.writeFile(csvPath, header, 'utf8');
   }
-  return csvPath; // acts as fileId
+  return csvPath;
 }
 
 async function appendCsvRow(_graph, fileId, row) {
@@ -148,7 +151,7 @@ function csvEscape(v) {
 }
 
 // ────────────────────────────────────────────────────────────
-// AI extraction helpers (copying your logic)
+/** AI extraction helpers */
 // ────────────────────────────────────────────────────────────
 function resolveOpenAI(client) {
   return client ?? openai;
@@ -216,16 +219,32 @@ async function extractFromImage(buffer, openaiClient, contentType = 'image/png')
 }
 
 async function parsePdfLocally(buffer) {
-  const mod = await import('pdf-parse'); // npm i pdf-parse
-  const pdfParse = mod.default || mod;
-  const result = await pdfParse(buffer);
-  return result.text || '';
+  console.log('parsePdfLocally got:', buffer?.constructor?.name, buffer?.length);
+  if (!(buffer instanceof Buffer) || buffer.length === 0) {
+    throw new Error('Invalid or empty buffer passed to parsePdfLocally');
+  }
+
+  // Use CJS require to avoid ESM default-export weirdness
+  try {
+    const result = await pdfParse(buffer);           // primary, supported call
+    return result.text || '';
+  } catch (e1) {
+    // Fallback: some builds accept the { data } form
+    try {
+      const result = await pdfParse({ data: buffer });
+      return result.text || '';
+    } catch (e2) {
+      e1.message = `pdf-parse failed on buffer: ${e1.message}`;
+      throw e1;
+    }
+  }
 }
 
 async function extractFromPdf(buffer, openaiClient) {
   let text = '';
-  if (process.env.PDF_EXTRACT_ENDPOINT) {
-    const res = await fetch(process.env.PDF_EXTRACT_ENDPOINT, {
+  const endpoint = process.env.PDF_EXTRACT_ENDPOINT;
+  if (endpoint && endpoint.trim()) {
+    const res = await fetch(endpoint.trim(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/pdf' },
       body: buffer
@@ -261,7 +280,7 @@ async function extractFromPdf(buffer, openaiClient) {
 }
 
 // ────────────────────────────────────────────────────────────
-// The processor (same signature & flow as your invoiceProcessor.processAttachment)
+// The processor
 // ────────────────────────────────────────────────────────────
 async function processAttachment({ buffer, filename, contentType }, openaiClient) {
   const ai = resolveOpenAI(openaiClient);
@@ -284,7 +303,6 @@ async function processAttachment({ buffer, filename, contentType }, openaiClient
       throw new Error('Missing invoice_date or total in AI output');
     }
 
-    // Local "storage" in place of OneDrive
     const client = await getGraphClient();
     const folderId = await ensureYearMonthFolder(client, data.invoice_date);
     await uploadFile(client, folderId, filename, buffer);
@@ -307,10 +325,9 @@ async function processAttachment({ buffer, filename, contentType }, openaiClient
 }
 
 // ────────────────────────────────────────────────────────────
-// Watcher (mirrors your scripts/watch-attachments.js behavior)
+// Watcher
 // ────────────────────────────────────────────────────────────
 async function handle(filePath) {
-  // Give the OS some time to finish writing the file
   await new Promise(r => setTimeout(r, 600));
 
   try {
@@ -325,7 +342,6 @@ async function handle(filePath) {
 
   try {
     const buffer = await fs.readFile(filePath);
-
     const result = await processAttachment({ buffer, filename, contentType }, openai);
     if (!result?.ok) throw new Error(result?.error || 'Processor reported failure');
 
@@ -344,7 +360,7 @@ async function handle(filePath) {
 async function main() {
   await ensureDirs();
 
-  // Process any existing files on startup (top-level only)
+  // Process any existing files on startup
   for (const f of fssync.readdirSync(ATTACHMENTS_DIR)) {
     const full = path.join(ATTACHMENTS_DIR, f);
     if (fssync.statSync(full).isFile() && isFinalInvoice(f)) handle(full);
