@@ -1,20 +1,4 @@
 #!/usr/bin/env node
-/**
- * scripts/local-test.js
- *
- * Local-only pipeline:
- * - Watches ATTACHMENTS_DIR for new files
- * - Extracts data (OpenAI Vision for images, pdf-parse → OpenAI for PDFs)
- * - Stores original file under OUTPUT_DIR/YYYY.MM/
- * - Appends a row to OUTPUT_DIR/YYYY.MM/invoices.csv
- * - Moves source file to <attachments>/processed or <attachments>/failed
- *
- * Env:
- *   ATTACHMENTS_DIR=api/attachments   (default)
- *   OUTPUT_DIR=local_out              (default)
- *   OPENAI_API_KEY=...                (required for AI extraction)
- *   PDF_EXTRACT_ENDPOINT=...          (optional; if missing, uses pdf-parse locally)
- */
 
 import chokidar from 'chokidar';
 import path from 'path';
@@ -23,31 +7,23 @@ import fssync from 'fs';
 import dotenv from 'dotenv';
 import fetch from 'node-fetch';
 import { OpenAI } from 'openai';
-import { createRequire } from 'module';           // ← add this
-const require = createRequire(import.meta.url);   // ← and this
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
 
-// Load CJS pdf-parse via require to avoid ESM interop issues
-const pdfParse = require('pdf-parse');            // ← real function export
+const pdfParse = require('pdf-parse');
 
 dotenv.config();
 
-// ────────────────────────────────────────────────────────────
-// Config
-// ────────────────────────────────────────────────────────────
 const DEFAULT_ATTACHMENTS_DIR = path.join('api', 'attachments');
 const ATTACHMENTS_DIR = path.resolve(process.env.ATTACHMENTS_DIR ?? DEFAULT_ATTACHMENTS_DIR);
 const PROCESSED_DIR = path.join(ATTACHMENTS_DIR, 'processed');
 const FAILED_DIR = path.join(ATTACHMENTS_DIR, 'failed');
 
-const OUTPUT_DIR = path.resolve(process.env.OUTPUT_DIR ?? 'local_out'); // where we "upload"
-const REQUIRE_AI = true; // set to false if you add your own regex fallback later
+const OUTPUT_DIR = path.resolve(process.env.OUTPUT_DIR ?? 'local_out');
+const REQUIRE_AI = true;
 
-// One OpenAI client instance
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// ────────────────────────────────────────────────────────────
-// Utilities
-// ────────────────────────────────────────────────────────────
 async function ensureDirs() {
   for (const d of [ATTACHMENTS_DIR, PROCESSED_DIR, FAILED_DIR, OUTPUT_DIR]) {
     if (!fssync.existsSync(d)) await fs.mkdir(d, { recursive: true });
@@ -105,9 +81,6 @@ async function getUniqueDest(dir, filename) {
   }
 }
 
-// ────────────────────────────────────────────────────────────
-// Local “storage” (mirrors your OneDrive+csvDrive API shape)
-// ────────────────────────────────────────────────────────────
 async function getGraphClient() {
   await fs.mkdir(OUTPUT_DIR, { recursive: true });
   return { kind: 'local', root: OUTPUT_DIR };
@@ -115,7 +88,7 @@ async function getGraphClient() {
 
 async function ensureYearMonthFolder(_client, invoiceDate) {
   const d = new Date(invoiceDate);
-  if (Number.isNaN(d.getTime())) throw new Error(`Bad invoice_date: ${invoiceDate}`);
+  if (Number.isNaN(d.getTime())) throw new Error(`Invalid invoice_date: ${invoiceDate}`);
   const year = String(d.getFullYear());
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const folderPath = path.join(OUTPUT_DIR, `${year}.${month}`);
@@ -150,9 +123,6 @@ function csvEscape(v) {
   return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
-// ────────────────────────────────────────────────────────────
-/** AI extraction helpers */
-// ────────────────────────────────────────────────────────────
 function resolveOpenAI(client) {
   return client ?? openai;
 }
@@ -190,7 +160,7 @@ function stripFence(str = '') {
 
 async function extractFromImage(buffer, openaiClient, contentType = 'image/png') {
   if (REQUIRE_AI && !process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY required for image extraction');
+    throw new Error('Authentication error: OPENAI_API_KEY is required for image extraction');
   }
   const base64 = buffer.toString('base64');
 
@@ -219,22 +189,20 @@ async function extractFromImage(buffer, openaiClient, contentType = 'image/png')
 }
 
 async function parsePdfLocally(buffer) {
-  console.log('parsePdfLocally got:', buffer?.constructor?.name, buffer?.length);
+  console.log('INFO: Received buffer:', buffer?.constructor?.name, buffer?.length);
   if (!(buffer instanceof Buffer) || buffer.length === 0) {
-    throw new Error('Invalid or empty buffer passed to parsePdfLocally');
+    throw new Error('Invalid input: Empty or invalid buffer provided to PDF parser');
   }
 
-  // Use CJS require to avoid ESM default-export weirdness
   try {
-    const result = await pdfParse(buffer);           // primary, supported call
+    const result = await pdfParse(buffer);
     return result.text || '';
   } catch (e1) {
-    // Fallback: some builds accept the { data } form
     try {
       const result = await pdfParse({ data: buffer });
       return result.text || '';
     } catch (e2) {
-      e1.message = `pdf-parse failed on buffer: ${e1.message}`;
+      e1.message = `PDF parsing error: ${e1.message}`;
       throw e1;
     }
   }
@@ -250,17 +218,17 @@ async function extractFromPdf(buffer, openaiClient) {
       body: buffer
     });
     if (!res.ok) {
-      throw new Error(`PDF extractor failed: ${res.status} ${res.statusText}`);
+      throw new Error(`PDF extraction service error: ${res.status} ${res.statusText}`);
     }
     text = await res.text();
   } else {
-    console.log('ℹ️ No PDF_EXTRACT_ENDPOINT set — parsing PDF locally.');
+    console.log('INFO: PDF_EXTRACT_ENDPOINT not configured. Using local PDF parsing.');
     text = await parsePdfLocally(buffer);
-    if (!text.trim()) throw new Error('Local PDF parse produced no text');
+    if (!text.trim()) throw new Error('PDF parsing error: No text extracted from document');
   }
 
   if (REQUIRE_AI && !process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY required for PDF field extraction');
+    throw new Error('Authentication error: OPENAI_API_KEY is required for PDF field extraction');
   }
 
   const response = await openaiClient.chat.completions.create({
@@ -279,9 +247,6 @@ async function extractFromPdf(buffer, openaiClient) {
   return parsed;
 }
 
-// ────────────────────────────────────────────────────────────
-// The processor
-// ────────────────────────────────────────────────────────────
 async function processAttachment({ buffer, filename, contentType }, openaiClient) {
   const ai = resolveOpenAI(openaiClient);
 
@@ -290,17 +255,17 @@ async function processAttachment({ buffer, filename, contentType }, openaiClient
 
     let data;
     if (contentType.includes('pdf')) {
-      console.log('📄 Processing PDF file...');
+      console.log('INFO: Processing PDF document...');
       data = await extractFromPdf(buffer, ai);
     } else if (contentType.startsWith('image/')) {
-      console.log('🖼️ Processing Image file...');
+      console.log('INFO: Processing image document...');
       data = await extractFromImage(buffer, ai, contentType);
     } else {
-      throw new Error(`Unsupported content type: ${contentType}`);
+      throw new Error(`Unsupported document format: ${contentType}`);
     }
 
     if (!data.invoice_date || !data.total) {
-      throw new Error('Missing invoice_date or total in AI output');
+      throw new Error('Validation error: Required fields missing in extraction results');
     }
 
     const client = await getGraphClient();
@@ -316,17 +281,14 @@ async function processAttachment({ buffer, filename, contentType }, openaiClient
       data.payment_method
     ]);
 
-    console.log(`✅ Stored locally in: ${folderId} | file: ${filename}`);
+    console.log(`SUCCESS: Document stored in: ${folderId} | file: ${filename}`);
     return { ok: true, filename, data, folder: folderId };
   } catch (err) {
-    console.error(`❌ ${filename} FULL ERROR:`, err);
+    console.error(`ERROR: ${filename} processing failed:`, err);
     return { ok: false, filename, error: err.message };
   }
 }
 
-// ────────────────────────────────────────────────────────────
-// Watcher
-// ────────────────────────────────────────────────────────────
 async function handle(filePath) {
   await new Promise(r => setTimeout(r, 600));
 
@@ -343,13 +305,13 @@ async function handle(filePath) {
   try {
     const buffer = await fs.readFile(filePath);
     const result = await processAttachment({ buffer, filename, contentType }, openai);
-    if (!result?.ok) throw new Error(result?.error || 'Processor reported failure');
+    if (!result?.ok) throw new Error(result?.error || 'Processing failure');
 
     const dest = await getUniqueDest(PROCESSED_DIR, filename);
     await safeRename(filePath, dest);
-    console.log('✔ processed', filename);
+    console.log('SUCCESS: Document processed:', filename);
   } catch (err) {
-    console.error('✖ failed', filename, err?.message || err);
+    console.error('ERROR: Processing failed:', filename, err?.message || err);
     try {
       const dest = await getUniqueDest(FAILED_DIR, filename);
       await safeRename(filePath, dest);
@@ -360,7 +322,6 @@ async function handle(filePath) {
 async function main() {
   await ensureDirs();
 
-  // Process any existing files on startup
   for (const f of fssync.readdirSync(ATTACHMENTS_DIR)) {
     const full = path.join(ATTACHMENTS_DIR, f);
     if (fssync.statSync(full).isFile() && isFinalInvoice(f)) handle(full);
@@ -376,12 +337,12 @@ async function main() {
   watcher.on('add', fp => {
     if (isFinalInvoice(path.basename(fp))) handle(fp);
   });
-  watcher.on('error', e => console.error('Watcher error:', e));
+  watcher.on('error', e => console.error('Monitoring error:', e));
 
-  console.log('Watching:', ATTACHMENTS_DIR);
+  console.log('INFO: Directory monitoring active on:', ATTACHMENTS_DIR);
 }
 
 main().catch(e => {
-  console.error(e);
+  console.error('FATAL ERROR:', e);
   process.exit(1);
 });

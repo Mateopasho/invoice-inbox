@@ -3,14 +3,24 @@ import twilio from 'twilio';
 
 export const config = {
   api: {
-    bodyParser: false, // Twilio sends application/x-www-form-urlencoded
+    bodyParser: false, // Twilio webhook uses form-urlencoded format
   },
 };
 
+/**
+ * Validates if the provided string is a valid international phone number
+ * @param {string} number - Phone number to validate
+ * @return {boolean} Validation result
+ */
 function isValidWhatsAppNumber(number) {
   return typeof number === 'string' && /^\+?[1-9]\d{6,14}$/.test(number);
 }
 
+/**
+ * Retrieves a safe number for message replies
+ * @param {string} from - Original sender number
+ * @return {string} Validated phone number or fallback
+ */
 function getSafeReplyNumber(from) {
   return isValidWhatsAppNumber(from)
     ? from
@@ -24,6 +34,7 @@ export default async function handler(req, res) {
       return;
     }
 
+    // Process the incoming request body
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const bodyStr = Buffer.concat(chunks).toString('utf8');
@@ -40,7 +51,7 @@ export default async function handler(req, res) {
     const replyTo = getSafeReplyNumber(From);
 
     if (numMedia === 0) {
-      await sendTwilioReply(replyTo, '📎 No attachment found in your message.');
+      await sendTwilioReply(replyTo, 'No attachment found in your message. Please attach the document and try again.');
       return res.status(200).end();
     }
 
@@ -48,7 +59,7 @@ export default async function handler(req, res) {
       `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`
     ).toString('base64');
 
-    // Step 1: Fetch media list from Twilio
+    // Retrieve media metadata from Twilio API
     const mediaRes = await fetch(
       `https://api.twilio.com/2010-04-01/Accounts/${AccountSid}/Messages/${MessageSid}/Media.json`,
       {
@@ -57,7 +68,7 @@ export default async function handler(req, res) {
     );
 
     if (!mediaRes.ok) {
-      console.error('❌ Failed to fetch media metadata:', await mediaRes.text());
+      console.error('ERROR: Failed to fetch media metadata:', await mediaRes.text());
       throw new Error(`Twilio media fetch failed: ${mediaRes.status}`);
     }
 
@@ -66,11 +77,12 @@ export default async function handler(req, res) {
 
     const media = [];
 
+    // Process each media item
     for (let i = 0; i < mediaList.length; i++) {
       const m = mediaList[i];
       const mediaUrl = m.url || `https://api.twilio.com${m.uri.replace('.json', '')}`;
 
-      // Try to fetch headers for real filename
+      // Attempt to retrieve file metadata
       let filename = `media_${i}`;
       let contentType = m.content_type || 'application/octet-stream';
 
@@ -91,7 +103,7 @@ export default async function handler(req, res) {
           contentType = contentTypeHeader;
         }
       } catch (headErr) {
-        console.warn(`⚠️ Failed to fetch HEAD for media ${i}:`, headErr.message);
+        console.warn('WARNING: Failed to fetch headers for media item:', headErr.message);
       }
 
       media.push({
@@ -101,46 +113,52 @@ export default async function handler(req, res) {
       });
     }
 
-    // Step 2: Forward metadata to invoice-inbox
+    // Forward metadata to invoice processing service
     const invoiceRes = await fetch(`${process.env.PUBLIC_URL}/api/invoice-inbox`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: From, numMedia, media }),
     });
 
-    let replyBody = '⚠️ Unexpected error.';
+    let replyBody = 'An unexpected error occurred while processing your document.';
 
     if (invoiceRes.ok) {
       try {
         const result = await invoiceRes.json();
-        replyBody = result.replyBody?.trim() || '✅ Done.';
+        replyBody = result.replyBody?.trim() || 'Your document has been successfully processed.';
       } catch (err) {
-        console.error('❌ Failed to parse JSON from invoice-inbox:', err);
-        replyBody = '⚠️ Could not parse response from invoice processor.';
+        console.error('ERROR: Failed to parse response from invoice processor:', err);
+        replyBody = 'Unable to process the response from document processing service.';
       }
     } else {
       const errorText = await invoiceRes.text();
-      console.error(`❌ invoice-inbox failed (${invoiceRes.status}):`, errorText);
-      replyBody = '⚠️ Invoice processor returned an error.';
+      console.error(`ERROR: Invoice processor failed (${invoiceRes.status}):`, errorText);
+      replyBody = 'The document processing service encountered an error. Please try again later.';
     }
 
     await sendTwilioReply(replyTo, replyBody);
     res.status(200).end();
   } catch (err) {
-    console.error('❌ Twilio webhook error:', err);
+    console.error('ERROR: Twilio webhook processing failed:', err);
     const fallbackTo = getSafeReplyNumber(req.body?.From || '');
     try {
       await sendTwilioReply(
         fallbackTo,
-        '⚠️ Error processing your message. Please try again later.'
+        'We encountered an error processing your message. Please try again later or contact support if the issue persists.'
       );
     } catch (twilioErr) {
-      console.error('❌ Failed to send fallback reply:', twilioErr);
+      console.error('ERROR: Failed to send error notification message:', twilioErr);
     }
     res.status(500).send('Internal Server Error');
   }
 }
 
+/**
+ * Sends a WhatsApp reply using Twilio API
+ * @param {string} to - Recipient's phone number
+ * @param {string} body - Message content
+ * @return {Promise} Twilio message promise
+ */
 async function sendTwilioReply(to, body) {
   const client = twilio(
     process.env.TWILIO_ACCOUNT_SID,

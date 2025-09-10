@@ -17,7 +17,7 @@ export default async function handler(req, res) {
     }
 
     if (Number(numMedia) === 0 || media.length === 0) {
-      res.json({ replyBody: 'No attachment found in the message.' });
+      res.json({ replyBody: 'No attachments were detected in your submission.' });
       return;
     }
 
@@ -90,28 +90,27 @@ export default async function handler(req, res) {
 
     if (ok.length) {
       replyBody +=
-        '✅ Processed:\n' +
+        'Successfully processed the following attachments:\n' +
         ok.map(r => `• ${r.filename}`).join('\n') +
         '\n\n';
     }
 
     if (err.length) {
       replyBody +=
-        '⚠️ Could not process:\n' +
+        'The following attachments could not be processed:\n' +
         err.map(r => `• ${r.filename} – ${r.error}`).join('\n');
     }
 
     if (!replyBody.trim()) {
-      replyBody = 'No attachment found in the message.';
+      replyBody = 'No attachments were detected in your submission.';
     }
 
     res.json({ replyBody: replyBody.trim() });
   } catch (fatal) {
-    console.error('💥 Fatal error in handler:', fatal);
+    console.error('Fatal error in handler:', fatal);
     res.status(500).json({
       replyBody:
-        '⚠️ An unexpected error occurred while processing your message. Please try again later.'
+        'We encountered a technical issue while processing your submission. Please try again or contact technical support if the issue persists.'
     });
   }
 }
-
